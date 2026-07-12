@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -12,7 +13,8 @@ import {
   RotateCcw,
   ShieldCheck,
   Sparkles,
-  UserRound
+  UserRound,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -33,6 +35,15 @@ import {
 import { exportPartWorkbook } from "@/lib/export-excel";
 
 const STORAGE_KEY = "future-self-quest-state-v1";
+const APP_VERSION = "1.1.0";
+const UPDATE_STORAGE_KEY = `future-self-quest-update-${APP_VERSION}`;
+
+const releaseNotes = [
+  "เพิ่มผลลัพธ์ 5 อาชีพ: Swordman, Mage, Archer, Acolyte และ Merchant",
+  "เพิ่มภาพตัวละครชายและหญิงให้ตรงกับเพศที่เลือก",
+  "ซ่อนอาชีพไว้จนกว่าจะตอบแบบประเมินครบทั้ง 127 ข้อ",
+  "แยกดาวน์โหลด Excel เป็น EQ, Big Five และ Professional Competencies"
+];
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -40,7 +51,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 
 type BodyType = "female" | "male";
 type Gender = "female" | "male";
-type JobId = "sword";
+type JobId = "acolyte" | "archer" | "mage" | "merchant" | "sword";
 
 type AvatarConfig = {
   jobId: JobId;
@@ -62,12 +73,49 @@ const jobOptions: Array<{
       female: "/jobs/swordwoman.png",
       male: "/jobs/swordman.png"
     }
+  },
+  {
+    id: "mage",
+    variants: {
+      female: "/jobs/magewoman.png",
+      male: "/jobs/mageman.png"
+    }
+  },
+  {
+    id: "archer",
+    variants: {
+      female: "/jobs/archerwoman.png",
+      male: "/jobs/archerman.png"
+    }
+  },
+  {
+    id: "acolyte",
+    variants: {
+      female: "/jobs/acolytewoman.png",
+      male: "/jobs/acolyteman.png"
+    }
+  },
+  {
+    id: "merchant",
+    variants: {
+      female: "/jobs/merchantwoman.png",
+      male: "/jobs/merchantman.png"
+    }
   }
 ];
 
-const genderOptions: Array<{ value: Gender; label: string; labelEn: string }> = [
-  { value: "male", label: "ชาย", labelEn: "Male" },
-  { value: "female", label: "หญิง", labelEn: "Female" }
+const resultJobByStat: Record<RpgStat["key"], JobId> = {
+  STR: "sword",
+  AGI: "merchant",
+  VIT: "sword",
+  DEX: "archer",
+  INT: "mage",
+  LUK: "acolyte"
+};
+
+const genderOptions: Array<{ value: Gender; label: string; labelEn: string; symbol: string }> = [
+  { value: "male", label: "ชาย", labelEn: "Male", symbol: "♂" },
+  { value: "female", label: "หญิง", labelEn: "Female", symbol: "♀" }
 ];
 
 function genderLabel(gender: Gender | null) {
@@ -114,6 +162,106 @@ function AvatarPreview({
   );
 }
 
+function AppOverlays({
+  showUpdate,
+  onOpenUpdate,
+  onCloseUpdate
+}: {
+  showUpdate: boolean;
+  onOpenUpdate: () => void;
+  onCloseUpdate: () => void;
+}) {
+  useEffect(() => {
+    if (!showUpdate) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCloseUpdate();
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onCloseUpdate, showUpdate]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onOpenUpdate}
+        className="fixed bottom-3 right-3 z-40 inline-flex h-9 items-center gap-2 rounded-[8px] border border-[#c5d6ea] bg-white/90 px-3 text-xs font-black text-[#38516f] shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:bg-white"
+        title="ดูรายละเอียดการอัปเดต"
+        aria-label={`ดูรายละเอียดการอัปเดต เวอร์ชัน ${APP_VERSION}`}
+      >
+        <Sparkles size={14} />
+        v{APP_VERSION}
+      </button>
+
+      {showUpdate ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-[#17243b]/55 px-4 py-6 backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="update-dialog-title"
+            className="panel animate-rise max-h-[calc(100svh-48px)] w-full max-w-xl overflow-y-auto rounded-[8px] p-5 shadow-[0_28px_80px_rgba(22,35,57,0.32)] sm:p-7"
+          >
+            <header className="flex items-start justify-between gap-5 border-b border-[#cdddf0] pb-5">
+              <div>
+                <p className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.18em] text-[#2f6fb6]">
+                  <Sparkles size={15} />
+                  Version {APP_VERSION}
+                </p>
+                <h2
+                  id="update-dialog-title"
+                  className="mt-2 text-3xl font-black text-[#24324b] sm:text-4xl"
+                >
+                  มีอะไรใหม่
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-[#667393]">
+                  อัปเดตประสบการณ์ทำแบบประเมินและผลลัพธ์อาชีพ
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onCloseUpdate}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[#c5d6ea] bg-white/80 text-[#38516f] transition hover:bg-white"
+                aria-label="ปิดหน้าต่างอัปเดต"
+                title="ปิด"
+              >
+                <X size={20} />
+              </button>
+            </header>
+
+            <div className="divide-y divide-[#d9e5f3]">
+              {releaseNotes.map((note) => (
+                <div key={note} className="grid grid-cols-[24px_minmax(0,1fr)] gap-3 py-4">
+                  <CheckCircle2 className="mt-0.5 text-[#2f8f8d]" size={20} />
+                  <p className="text-sm font-bold leading-7 text-[#38516f] sm:text-base">{note}</p>
+                </div>
+              ))}
+            </div>
+
+            <footer className="mt-2 flex flex-col gap-3 border-t border-[#cdddf0] pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-bold text-[#71809a]">Future Self Quest v{APP_VERSION}</p>
+              <button
+                type="button"
+                onClick={onCloseUpdate}
+                className="inline-flex h-11 items-center justify-center rounded-[8px] bg-[#2f6fb6] px-6 text-sm font-black text-white shadow-glow transition hover:-translate-y-0.5 hover:bg-[#275f9e]"
+              >
+                เริ่มใช้งาน
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export default function Home() {
   const [playerName, setPlayerName] = useState("");
   const [gender, setGender] = useState<Gender | null>(null);
@@ -121,6 +269,7 @@ export default function Home() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [started, setStarted] = useState(false);
   const [showResult, setShowResult] = useState(false);
+  const [showUpdate, setShowUpdate] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>(defaultAvatarConfig);
 
@@ -152,6 +301,7 @@ export default function Home() {
         window.localStorage.removeItem(STORAGE_KEY);
       }
     }
+    setShowUpdate(window.localStorage.getItem(UPDATE_STORAGE_KEY) !== "seen");
     setHydrated(true);
   }, []);
 
@@ -211,62 +361,83 @@ export default function Home() {
     setCurrentIndex((index) => Math.min(questions.length - 1, index + 1));
   }
 
+  function closeUpdate() {
+    window.localStorage.setItem(UPDATE_STORAGE_KEY, "seen");
+    setShowUpdate(false);
+  }
+
+  const appOverlays = (
+    <AppOverlays
+      showUpdate={showUpdate}
+      onOpenUpdate={() => setShowUpdate(true)}
+      onCloseUpdate={closeUpdate}
+    />
+  );
+
   if (!hydrated) {
     return <main className="quest-shell min-h-svh" />;
   }
 
   if (!started) {
     return (
-      <main className="quest-shell flex min-h-svh items-center px-4 py-6 sm:px-6 lg:px-10">
-        <StartScreen
-          playerName={playerName}
-          setPlayerName={setPlayerName}
-          gender={gender}
-          setGender={(nextGender) => {
-            setGender(nextGender);
-            setAvatarConfig((config) => ({ ...config, bodyType: nextGender }));
-          }}
-          onStart={beginQuest}
-        />
-      </main>
+      <>
+        <main className="quest-shell flex min-h-svh items-center px-4 py-6 sm:px-6 lg:px-10">
+          <StartScreen
+            playerName={playerName}
+            setPlayerName={setPlayerName}
+            gender={gender}
+            setGender={(nextGender) => {
+              setGender(nextGender);
+              setAvatarConfig((config) => ({ ...config, bodyType: nextGender }));
+            }}
+            onStart={beginQuest}
+          />
+        </main>
+        {appOverlays}
+      </>
     );
   }
 
   if (showResult && isComplete) {
     return (
-      <main className="quest-shell min-h-svh px-4 py-6 sm:px-6 lg:px-10">
-        <ResultScreen
-          playerName={playerName}
-          gender={gender}
-          avatarConfig={avatarConfig}
-          answers={answers}
-          profile={profile}
-          onRestart={restart}
-          onBack={() => {
-            setShowResult(false);
-            setCurrentIndex(questions.length - 1);
-          }}
-        />
-      </main>
+      <>
+        <main className="quest-shell min-h-svh px-4 py-6 sm:px-6 lg:px-10">
+          <ResultScreen
+            playerName={playerName}
+            gender={gender}
+            avatarConfig={avatarConfig}
+            answers={answers}
+            profile={profile}
+            onRestart={restart}
+            onBack={() => {
+              setShowResult(false);
+              setCurrentIndex(questions.length - 1);
+            }}
+          />
+        </main>
+        {appOverlays}
+      </>
     );
   }
 
   return (
-    <main className="quest-shell min-h-svh px-4 py-5 sm:px-6 lg:px-10">
-      <QuestScreen
-        answers={answers}
-        currentQuestion={currentQuestion}
-        currentIndex={currentIndex}
-        playerName={playerName}
-        gender={gender}
-        avatarConfig={avatarConfig}
-        profile={profile}
-        onAnswer={answerCurrent}
-        onNext={goNext}
-        onPrevious={goPrevious}
-        onRestart={restart}
-      />
-    </main>
+    <>
+      <main className="quest-shell min-h-svh px-4 py-5 sm:px-6 lg:px-10">
+        <QuestScreen
+          answers={answers}
+          currentQuestion={currentQuestion}
+          currentIndex={currentIndex}
+          playerName={playerName}
+          gender={gender}
+          profile={profile}
+          onAnswer={answerCurrent}
+          onNext={goNext}
+          onPrevious={goPrevious}
+          onRestart={restart}
+        />
+      </main>
+      {appOverlays}
+    </>
   );
 }
 
@@ -329,15 +500,31 @@ function StartScreen({
                     className={cx(
                       "flex h-16 items-center justify-between rounded-[8px] border px-4 text-left transition hover:-translate-y-0.5",
                       selected
-                        ? "border-[#2f6fb6] bg-[#2f6fb6] text-white shadow-glow"
-                        : "border-[#c5d6ea] bg-white/75 text-[#38516f] hover:bg-white"
+                        ? option.value === "female"
+                          ? "border-[#b84f73] bg-[#b84f73] text-white shadow-[0_16px_32px_rgba(184,79,115,0.24)]"
+                          : "border-[#2f6fb6] bg-[#2f6fb6] text-white shadow-glow"
+                        : option.value === "female"
+                          ? "border-[#e3b5c5] bg-[#fff7fa] text-[#784057] hover:bg-[#fff0f5]"
+                          : "border-[#c5d6ea] bg-white/75 text-[#38516f] hover:bg-white"
                     )}
                   >
                     <span>
                       <span className="block text-base font-black">{option.label}</span>
                       <span className="block text-xs font-bold opacity-70">{option.labelEn}</span>
                     </span>
-                    <UserRound size={22} />
+                    <span
+                      aria-hidden="true"
+                      className={cx(
+                        "grid h-10 w-10 place-items-center rounded-full border text-3xl font-black leading-none",
+                        selected
+                          ? "border-white/45 bg-white/15 text-white"
+                          : option.value === "female"
+                            ? "border-[#e3b5c5] bg-[#ffeaf1] text-[#b84f73]"
+                            : "border-[#b8cce4] bg-[#edf5ff] text-[#2f6fb6]"
+                      )}
+                    >
+                      {option.symbol}
+                    </span>
                   </button>
                 );
               })}
@@ -423,7 +610,6 @@ function QuestScreen({
   currentIndex,
   playerName,
   gender,
-  avatarConfig,
   profile,
   onAnswer,
   onNext,
@@ -435,7 +621,6 @@ function QuestScreen({
   currentIndex: number;
   playerName: string;
   gender: Gender | null;
-  avatarConfig: AvatarConfig;
   profile: ProfileResult;
   onAnswer: (value: number) => void;
   onNext: () => void;
@@ -464,13 +649,22 @@ function QuestScreen({
         </div>
 
         <div className="mt-6 overflow-hidden rounded-[8px] border border-white/80 bg-white/55">
-          <div className="relative flex h-60 items-end justify-center bg-gradient-to-b from-[#f7fbff] to-[#dcebf7]">
-            <div className="pulse-rune absolute bottom-8 h-20 w-44 rounded-[50%] border-4 border-[#8ab7ed]/40" />
-            <AvatarPreview
-              avatarConfig={avatarConfig}
-              altText={`ตัวละครของ ${playerName || "ผู้เล่น"}`}
-              className="avatar-float relative h-[92%]"
+          <div className="relative flex h-60 items-center justify-center bg-[#dcebf7]">
+            <img
+              src="/quest-hall.svg"
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover opacity-45"
             />
+            <div className="absolute inset-0 bg-white/45" />
+            <div className="pulse-rune absolute bottom-7 h-16 w-40 rounded-[50%] border-4 border-[#8ab7ed]/35" />
+            <div className="relative z-10 flex flex-col items-center text-center">
+              <span className="grid h-14 w-14 place-items-center rounded-full border border-white/80 bg-[#2f6fb6] text-white shadow-glow">
+                <LockKeyhole size={25} />
+              </span>
+              <p className="mt-3 text-xs font-black text-[#61799b]">อาชีพยังไม่เปิดเผย</p>
+              <p className="text-4xl font-black text-[#24324b]">???</p>
+              <p className="mt-1 text-xs font-bold text-[#586984]">ปลดล็อกเมื่อทำครบทุกข้อ</p>
+            </div>
           </div>
         </div>
 
@@ -950,6 +1144,10 @@ function ResultScreen({
   const [exportingPart, setExportingPart] = useState<ChapterId | null>(null);
   const [exportError, setExportError] = useState("");
   const sortedStats = [...profile.rpgStats].sort((a, b) => b.value - a.value);
+  const resultAvatarConfig: AvatarConfig = {
+    ...avatarConfig,
+    jobId: resultJobByStat[profile.classProfile.key]
+  };
   const groupedScores = chapters.map((chapter) => ({
     chapter,
     scores: profile.categoryScores.filter((score) => score.key && score.label)
@@ -1052,7 +1250,7 @@ function ResultScreen({
             <div className="relative mt-3 flex h-72 items-end justify-center">
               <div className="pulse-rune absolute bottom-8 h-24 w-56 rounded-[50%] border-4 border-[#8ab7ed]/45" />
               <AvatarPreview
-                avatarConfig={avatarConfig}
+                avatarConfig={resultAvatarConfig}
                 altText={`ตัวละครอาชีพ ${profile.classProfile.titleTh}`}
                 className="avatar-float relative z-10 h-full"
               />
