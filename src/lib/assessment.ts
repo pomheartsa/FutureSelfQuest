@@ -66,7 +66,7 @@ export const chapters: ChapterMeta[] = [
     title: "Big Five Locator",
     titleTh: "คุณลักษณะ Big Five",
     short: "BIG 5",
-    scale: "5-1",
+    scale: "1-5",
     accent: "#39A7A5"
   },
   {
