@@ -2,6 +2,7 @@
 
 import {
   BarChart3,
+  BookOpenCheck,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -26,6 +27,7 @@ import {
   type Question
 } from "@/lib/assessment";
 import {
+  assessmentMethodology,
   calculateProfile,
   type AnswerMap,
   type CategoryScore,
@@ -34,11 +36,15 @@ import {
 } from "@/lib/scoring";
 import { exportPartWorkbook } from "@/lib/export-excel";
 
-const STORAGE_KEY = "future-self-quest-state-v1";
-const APP_VERSION = "1.1.1";
+const SESSION_STORAGE_KEY = "future-self-quest-session-v2";
+const LEGACY_STORAGE_KEY = "future-self-quest-state-v1";
+const APP_VERSION = "1.2.1";
 const UPDATE_STORAGE_KEY = `future-self-quest-update-${APP_VERSION}`;
 
 const releaseNotes = [
+  "แก้ไขสถานะแบบประเมินค้างหลังปิดเว็บ โดยเริ่มใหม่เมื่อเปิดแท็บครั้งถัดไป",
+  "เพิ่มคะแนนดิบ Norm Score ค่า Mean และช่วงอ้างอิงจากเอกสารประกอบการสอน",
+  "เพิ่มหัวข้อวิธีคำนวณ แหล่งอ้างอิง และข้อจำกัดของแบบประเมิน",
   "ปรับสมดุลสูตรเลือกอาชีพให้ทั้ง 5 อาชีพมีโอกาสเป็นผลลัพธ์อย่างเหมาะสม",
   "เพิ่มผลลัพธ์ 5 อาชีพ: Swordman, Mage, Archer, Acolyte และ Merchant",
   "เพิ่มภาพตัวละครชายและหญิงให้ตรงกับเพศที่เลือก",
@@ -279,7 +285,9 @@ export default function Home() {
   const isComplete = profile.answeredCount === questions.length;
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    // Keep progress across refreshes, but start fresh after the browser tab is closed.
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
     if (raw) {
       try {
         const saved = JSON.parse(raw) as {
@@ -299,7 +307,7 @@ export default function Home() {
         setGender(saved.gender || saved.avatarConfig?.bodyType || null);
         setAvatarConfig(normalizeAvatarConfig(saved.avatarConfig));
       } catch {
-        window.localStorage.removeItem(STORAGE_KEY);
+        window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
       }
     }
     setShowUpdate(window.localStorage.getItem(UPDATE_STORAGE_KEY) !== "seen");
@@ -308,8 +316,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(
-      STORAGE_KEY,
+    window.sessionStorage.setItem(
+      SESSION_STORAGE_KEY,
       JSON.stringify({ playerName, gender, answers, currentIndex, started, showResult, avatarConfig })
     );
   }, [answers, avatarConfig, currentIndex, gender, hydrated, playerName, showResult, started]);
@@ -329,7 +337,7 @@ export default function Home() {
     setPlayerName("");
     setGender(null);
     setAvatarConfig(defaultAvatarConfig);
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
   }
 
   function answerCurrent(value: number) {
@@ -990,6 +998,21 @@ type GroupedScores = Array<{
   scores: CategoryScore[];
 }>;
 
+function scoreReferenceSummary(score: CategoryScore) {
+  const reference = score.reference;
+  if (!reference) return score.levelLabel;
+
+  if (reference.kind === "eq-range") {
+    return `ช่วงต้นฉบับ ${reference.low}-${reference.high} · ${reference.label}`;
+  }
+
+  if (reference.kind === "competency-benchmark") {
+    return `Mean ${reference.mean} · ช่วง 68% ${reference.low}-${reference.high} · ${reference.label}`;
+  }
+
+  return `Norm ${score.normScore} · ${reference.label}`;
+}
+
 function partSummaryRows(groupedScores: GroupedScores) {
   return groupedScores.map(({ chapter, scores }) => {
     const raw = scores.reduce((sum, score) => sum + score.raw, 0);
@@ -1087,15 +1110,16 @@ function PrintReport({
           <h2>
             {chapter.short}: {chapter.titleTh}
           </h2>
-          <table>
+          <table className="print-score-table">
             <thead>
               <tr>
                 <th>Category</th>
                 <th>Raw</th>
                 <th>Max</th>
                 <th>Norm</th>
-                <th>Power</th>
-                <th>Level</th>
+                <th>0-100</th>
+                <th>Reference</th>
+                <th>Interpretation</th>
               </tr>
             </thead>
             <tbody>
@@ -1110,7 +1134,8 @@ function PrintReport({
                   <td>{score.max}</td>
                   <td>{score.normScore ?? "-"}</td>
                   <td>{score.percent}</td>
-                  <td>{score.levelLabel}</td>
+                  <td>{scoreReferenceSummary(score)}</td>
+                  <td>{score.note}</td>
                 </tr>
               ))}
             </tbody>
@@ -1118,8 +1143,23 @@ function PrintReport({
         </section>
       ))}
 
+      <section className="print-section">
+        <h2>วิธีคำนวณและแหล่งอ้างอิง</h2>
+        {chapters.map((chapter) => {
+          const methodology = assessmentMethodology[chapter.id];
+          return (
+            <div key={chapter.id} className="print-method">
+              <strong>{methodology.title}</strong>
+              <p>{methodology.calculation}</p>
+              <p>แหล่งอ้างอิง: {methodology.source}</p>
+              <p>{methodology.note}</p>
+            </div>
+          );
+        })}
+      </section>
+
       <footer className="print-footer">
-        ผลลัพธ์นี้ใช้เพื่อสะท้อนตัวเองจากแบบสอบถาม ไม่ใช่การวินิจฉัยทางจิตวิทยาหรือการประเมินทางคลินิก
+        Big Five Locator และผลลัพธ์ทั้งหมดใช้เพื่อการเรียนการสอนและการสะท้อนตนเอง ไม่ใช่การวินิจฉัยทางจิตวิทยาหรือการประเมินทางคลินิก
       </footer>
     </section>
   );
@@ -1332,6 +1372,47 @@ function ResultScreen({
           </div>
         ))}
       </section>
+
+      <section className="panel mt-5 rounded-[8px] p-5" aria-labelledby="methodology-title">
+        <div className="flex items-start gap-3 border-b border-[#cdddf0] pb-4">
+          <BookOpenCheck className="mt-0.5 shrink-0 text-[#2f6fb6]" size={22} />
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-[#61799b]">SCORING NOTE</p>
+            <h3 id="methodology-title" className="mt-1 text-2xl font-black text-[#24324b]">
+              วิธีคำนวณและแหล่งอ้างอิง
+            </h3>
+          </div>
+        </div>
+
+        <div className="grid gap-5 py-5 md:grid-cols-3 md:gap-0">
+          {chapters.map((chapter, index) => {
+            const methodology = assessmentMethodology[chapter.id];
+            return (
+              <article
+                key={chapter.id}
+                className={cx(index > 0 && "border-t border-[#cdddf0] pt-5 md:border-l md:border-t-0 md:px-5 md:pt-0", index === 0 && "md:pr-5")}
+              >
+                <p className="text-sm font-black" style={{ color: chapter.accent }}>
+                  {methodology.title}
+                </p>
+                <p className="mt-2 text-sm font-bold leading-6 text-[#3f5270]">{methodology.calculation}</p>
+                <p className="mt-3 text-xs leading-5 text-[#667393]">
+                  <strong className="text-[#526987]">แหล่งอ้างอิง:</strong> {methodology.source}
+                </p>
+                <p className="mt-2 text-xs leading-5 text-[#667393]">{methodology.note}</p>
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="flex items-start gap-3 border-t border-[#cdddf0] pt-4 text-sm leading-6 text-[#667393]">
+          <ShieldCheck className="mt-0.5 shrink-0 text-[#39a7a5]" size={18} />
+          <p>
+            Big Five Locator และผลลัพธ์ทั้งหมดใช้เพื่อการเรียนการสอนและการสะท้อนตนเอง
+            ไม่ใช่การวินิจฉัยทางจิตวิทยาหรือการประเมินทางคลินิก
+          </p>
+        </div>
+      </section>
     </section>
   );
 }
@@ -1444,6 +1525,20 @@ function StatBar({ stat }: { stat: RpgStat }) {
 }
 
 function CategoryBar({ score }: { score: CategoryScore }) {
+  const metrics = [{ label: "คะแนนดิบ", value: `${score.raw}/${score.max}` }];
+  const reference = score.reference;
+
+  if (score.normScore !== undefined) {
+    metrics.push({ label: "Norm Score", value: String(score.normScore) });
+  } else if (reference?.kind === "eq-range") {
+    metrics.push({ label: "ช่วงต้นฉบับ", value: `${reference.low}-${reference.high}` });
+  } else if (reference?.kind === "competency-benchmark") {
+    metrics.push(
+      { label: "Mean", value: String(reference.mean) },
+      { label: "ช่วง 68%", value: `${reference.low}-${reference.high}` }
+    );
+  }
+
   return (
     <div className="rounded-[8px] border border-[#cdddf0] bg-white/62 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1454,15 +1549,38 @@ function CategoryBar({ score }: { score: CategoryScore }) {
           </p>
         </div>
         <div className="text-right">
-          <p className="text-2xl font-black text-[#2d5f9c]">{score.percent}</p>
-          <p className="text-xs font-bold text-[#667393]">
-            {score.normScore ? `Norm ${score.normScore}` : score.levelLabel}
+          <p className="whitespace-nowrap text-2xl font-black text-[#2d5f9c]">
+            {score.percent}<span className="text-xs text-[#667393]">/100</span>
           </p>
+          <p className="text-xs font-bold text-[#667393]">คะแนนแสดงผล</p>
         </div>
       </div>
       <div className="mt-3 h-3 overflow-hidden rounded-full bg-[#e3edf8]">
         <div className="h-full rounded-full bg-[#e0a93d]" style={{ width: `${score.percent}%` }} />
       </div>
+
+      <div
+        className="mt-3 grid border-y border-[#dbe7f4] py-2"
+        style={{ gridTemplateColumns: `repeat(${metrics.length}, minmax(0, 1fr))` }}
+      >
+        {metrics.map((metric, index) => (
+          <div key={metric.label} className={cx("min-w-0 px-2", index > 0 && "border-l border-[#dbe7f4]") }>
+            <p className="truncate text-[10px] font-black uppercase text-[#71809a]">{metric.label}</p>
+            <p className="mt-0.5 text-sm font-black text-[#38516f]">{metric.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <p
+        className={cx(
+          "mt-3 text-sm font-black leading-6",
+          score.level === "high" && "text-[#168e8a]",
+          score.level === "mid" && "text-[#2f6fb6]",
+          score.level === "low" && "text-[#c45f63]"
+        )}
+      >
+        {score.levelLabel}
+      </p>
       <p className="mt-3 text-sm leading-6 text-[#667393]">{score.note}</p>
     </div>
   );

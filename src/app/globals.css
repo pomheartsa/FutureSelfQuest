@@ -284,6 +284,25 @@ input:focus-visible {
     font-size: 10px;
   }
 
+  .print-score-table {
+    font-size: 9px !important;
+  }
+
+  .print-score-table td:nth-last-child(-n + 2),
+  .print-score-table th:nth-last-child(-n + 2) {
+    text-align: left;
+  }
+
+  .print-method {
+    border-bottom: 1px solid #d8e1ec;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+  }
+
+  .print-method:last-child {
+    border-bottom: 0;
+  }
+
   .print-footer {
     border-top: 1px solid #b9c7d8;
     margin-top: 18px;

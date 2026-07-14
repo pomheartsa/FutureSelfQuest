@@ -1,8 +1,16 @@
-import { categories, questions, type CategoryKey } from "./assessment";
+import { categories, questions, type CategoryKey, type ChapterId } from "./assessment";
 
 export type AnswerMap = Record<string, number>;
 
 export type Level = "low" | "mid" | "high";
+
+export type ScoreReference = {
+  kind: "eq-range" | "big-five-norm" | "competency-benchmark";
+  label: string;
+  low?: number;
+  high?: number;
+  mean?: number;
+};
 
 export type CategoryScore = {
   key: CategoryKey;
@@ -17,6 +25,7 @@ export type CategoryScore = {
   level: Level;
   levelLabel: string;
   note: string;
+  reference?: ScoreReference;
 };
 
 export type RpgStatKey = "STR" | "AGI" | "VIT" | "INT" | "DEX" | "LUK";
@@ -46,6 +55,30 @@ export type ProfileResult = {
   summary: string;
   strengths: string[];
   growth: string[];
+};
+
+export const assessmentMethodology: Record<
+  ChapterId,
+  { title: string; calculation: string; source: string; note: string }
+> = {
+  eq: {
+    title: "EQ",
+    calculation: "รวมคะแนนข้อที่อยู่ในแต่ละด้าน แล้วแสดงคะแนน 0-100 ด้วยสูตร (คะแนนดิบ / คะแนนเต็ม) x 100",
+    source: "Emotional Quotient (EQ) questionnaire และช่วงคะแนนรายด้านจากเอกสารประกอบการสอนที่อาจารย์มอบให้",
+    note: "ช่วงคะแนนต้นฉบับ: Self-awareness 36-48, Social Awareness 18-24, Self Management 24-32 และ Social Skills 18-24"
+  },
+  bigFive: {
+    title: "Big Five Locator",
+    calculation: "รวมคะแนนดิบ 5 ข้อต่อด้าน แปลงเป็น Norm Score ด้วย Score Conversion Sheet แล้วแปลง Norm 20-80 เป็นคะแนน 0-100",
+    source: "Big Five Locator Score Conversion Sheet และ Big Five Locator Interpretation Sheet, Chapter 2: Understanding Individual Differences",
+    note: "เฉพาะ Adjustment กลับทิศคะแนน 0-100 เพื่อให้คะแนนสูงหมายถึงความมั่นคงทางอารมณ์สูง ทั้งนี้ Norm Score ยังคงแสดงค่าต้นฉบับ"
+  },
+  competency: {
+    title: "Professional Competencies",
+    calculation: "รวมคะแนน 10 ข้อของแต่ละสมรรถนะบนมาตร 1-10 ได้คะแนนรายด้าน 10-100 แล้วเทียบกับ Mean และช่วงอ้างอิง 68%",
+    source: "Professional Competencies Plot Graph: competencies rated by experienced managers and managerial professionals",
+    note: "ช่วงอ้างอิงใช้เพื่อเปรียบเทียบกับ managerial population ตามเอกสารประกอบการสอน ไม่ใช่คะแนนผ่านหรือตก"
+  }
 };
 
 const categoryMeta = new Map(categories.map((category) => [category.key, category]));
@@ -287,6 +320,55 @@ const bigFiveNormScores: Partial<Record<CategoryKey, Record<number, number>>> = 
   }
 };
 
+const eqReferenceRanges: Partial<Record<CategoryKey, { low: number; high: number }>> = {
+  selfAwareness: { low: 36, high: 48 },
+  socialAwareness: { low: 18, high: 24 },
+  selfManagement: { low: 24, high: 32 },
+  socialSkills: { low: 18, high: 24 }
+};
+
+const competencyBenchmarks: Partial<
+  Record<CategoryKey, { mean: number; low: number; high: number }>
+> = {
+  managingSelf: { mean: 78, low: 69, high: 87 },
+  communication: { mean: 75, low: 66, high: 84 },
+  diversity: { mean: 75, low: 63, high: 87 },
+  ethics: { mean: 84, low: 75, high: 93 },
+  acrossCultures: { mean: 72, low: 58, high: 86 },
+  teams: { mean: 77, low: 65, high: 89 },
+  change: { mean: 69, low: 52, high: 83 }
+};
+
+const bigFiveInterpretations: Partial<
+  Record<CategoryKey, { low: string; mid: string; high: string }>
+> = {
+  adjustment: {
+    low: "Resilient - ฟื้นตัวและตั้งหลักได้ดี",
+    mid: "Responsive - ตอบสนองตามสถานการณ์",
+    high: "Reactive - ไวต่อแรงกระตุ้น"
+  },
+  sociability: {
+    low: "Introvert - ชอบพื้นที่ส่วนตัว",
+    mid: "Ambivert - สมดุลระหว่างสังคมกับพื้นที่ส่วนตัว",
+    high: "Extrovert - ได้พลังจากการเข้าสังคม"
+  },
+  openness: {
+    low: "Preserver - ชอบแนวทางที่คุ้นเคย",
+    mid: "Moderate - เปิดรับอย่างพอดี",
+    high: "Explorer - ชอบสำรวจสิ่งใหม่"
+  },
+  agreeableness: {
+    low: "Challenger - ตั้งคำถามและรักษาจุดยืน",
+    mid: "Negotiator - ประนีประนอมอย่างสมดุล",
+    high: "Adapter - ร่วมมือและปรับตัวกับผู้อื่น"
+  },
+  conscientiousness: {
+    low: "Flexible - ยืดหยุ่นและเป็นธรรมชาติ",
+    mid: "Balanced - สมดุลระหว่างระบบกับความยืดหยุ่น",
+    high: "Focused - มีระบบและมุ่งเป้าหมาย"
+  }
+};
+
 const statLabels: Record<RpgStatKey, Pick<RpgStat, "label" | "labelTh">> = {
   STR: { label: "Resolve", labelTh: "แรงขับเคลื่อน" },
   AGI: { label: "Adaptability", labelTh: "ความยืดหยุ่น" },
@@ -301,7 +383,7 @@ function clamp(value: number, min = 0, max = 100) {
 }
 
 function levelFromPercent(percent: number): Level {
-  if (percent >= 72) return "high";
+  if (percent >= 75) return "high";
   if (percent >= 45) return "mid";
   return "low";
 }
@@ -327,6 +409,90 @@ function normScoreFor(key: CategoryKey, raw: number) {
   return lookup[clampedRaw];
 }
 
+type NormBand = "low" | "mid" | "high";
+
+function normBand(normScore: number): NormBand {
+  if (normScore < 45) return "low";
+  if (normScore < 55) return "mid";
+  return "high";
+}
+
+function referenceFor(
+  chapterId: ChapterId,
+  key: CategoryKey,
+  raw: number,
+  normScore?: number
+): ScoreReference | undefined {
+  if (chapterId === "eq") {
+    const range = eqReferenceRanges[key];
+    if (!range) return undefined;
+    return {
+      kind: "eq-range",
+      ...range,
+      label: raw >= range.low ? "อยู่ในช่วงคะแนนต้นฉบับ" : "ต่ำกว่าช่วงคะแนนต้นฉบับ"
+    };
+  }
+
+  if (chapterId === "bigFive" && normScore !== undefined) {
+    const interpretations = bigFiveInterpretations[key];
+    if (!interpretations) return undefined;
+    return {
+      kind: "big-five-norm",
+      label: interpretations[normBand(normScore)]
+    };
+  }
+
+  if (chapterId === "competency") {
+    const benchmark = competencyBenchmarks[key];
+    if (!benchmark) return undefined;
+    const label =
+      raw < benchmark.low
+        ? "ต่ำกว่าช่วงอ้างอิง 68%"
+        : raw > benchmark.high
+          ? "สูงกว่าช่วงอ้างอิง 68%"
+          : "อยู่ในช่วงอ้างอิง 68%";
+    return {
+      kind: "competency-benchmark",
+      ...benchmark,
+      label
+    };
+  }
+
+  return undefined;
+}
+
+function levelForCategory(
+  chapterId: ChapterId,
+  key: CategoryKey,
+  raw: number,
+  percent: number,
+  normScore?: number
+): Level {
+  if (chapterId === "bigFive" && normScore !== undefined) {
+    const band = normBand(normScore);
+    if (key === "adjustment") {
+      return band === "low" ? "high" : band === "high" ? "low" : "mid";
+    }
+    return band;
+  }
+
+  if (chapterId === "competency") {
+    const benchmark = competencyBenchmarks[key];
+    if (benchmark) {
+      if (raw < benchmark.low) return "low";
+      if (raw > benchmark.high) return "high";
+      return "mid";
+    }
+  }
+
+  if (chapterId === "eq") {
+    const range = eqReferenceRanges[key];
+    if (range && raw >= range.low) return "high";
+  }
+
+  return levelFromPercent(percent);
+}
+
 function scoreCategories(answers: AnswerMap): CategoryScore[] {
   return categories.map((meta) => {
     const items = questions.filter((question) => question.category === meta.key);
@@ -344,7 +510,8 @@ function scoreCategories(answers: AnswerMap): CategoryScore[] {
 
     const exactPercent = clamp(percent);
     const safePercent = Math.round(exactPercent);
-    const level = levelFromPercent(safePercent);
+    const reference = referenceFor(meta.chapterId, meta.key, raw, normScore);
+    const level = levelForCategory(meta.chapterId, meta.key, raw, safePercent, normScore);
 
     return {
       key: meta.key,
@@ -357,8 +524,9 @@ function scoreCategories(answers: AnswerMap): CategoryScore[] {
       exactPercent,
       itemCount: items.length,
       level,
-      levelLabel: levelLabel(level),
-      note: categoryNotes[meta.key][level]
+      levelLabel: reference?.label ?? levelLabel(level),
+      note: categoryNotes[meta.key][level],
+      reference
     };
   });
 }

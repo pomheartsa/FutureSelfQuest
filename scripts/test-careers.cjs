@@ -57,3 +57,36 @@ for (const [expectedCareer, boostedCategories] of Object.entries(careerProfiles)
 
   console.log(`${expectedCareer}: passed`);
 }
+
+const referenceAnswers = {};
+for (const question of questions) {
+  referenceAnswers[question.id] = question.kind === "eq" ? 4 : question.kind === "bigFive" ? 3 : 8;
+}
+
+const referenceProfile = calculateProfile(referenceAnswers);
+const scoreByKey = new Map(referenceProfile.categoryScores.map((score) => [score.key, score]));
+
+function assertEqual(actual, expected, message) {
+  if (actual !== expected) {
+    throw new Error(`${message}: expected ${expected}, received ${actual}`);
+  }
+}
+
+const selfAwareness = scoreByKey.get("selfAwareness");
+assertEqual(selfAwareness.raw, 48, "EQ Self-awareness raw score");
+assertEqual(selfAwareness.percent, 100, "EQ Self-awareness 0-100 score");
+assertEqual(selfAwareness.reference.low, 36, "EQ Self-awareness reference low");
+assertEqual(selfAwareness.reference.high, 48, "EQ Self-awareness reference high");
+
+const openness = scoreByKey.get("openness");
+assertEqual(openness.raw, 15, "Big Five Openness raw score");
+assertEqual(openness.normScore, 50, "Big Five Openness norm score");
+assertEqual(openness.percent, 50, "Big Five Openness 0-100 score");
+
+const managingSelf = scoreByKey.get("managingSelf");
+assertEqual(managingSelf.raw, 80, "Pro Managing Self raw score");
+assertEqual(managingSelf.reference.mean, 78, "Pro Managing Self mean");
+assertEqual(managingSelf.reference.low, 69, "Pro Managing Self reference low");
+assertEqual(managingSelf.reference.high, 87, "Pro Managing Self reference high");
+
+console.log("Reference scoring: passed");

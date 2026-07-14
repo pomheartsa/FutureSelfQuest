@@ -7,7 +7,12 @@ import {
   type ChapterId,
   type Question
 } from "./assessment";
-import type { AnswerMap, CategoryScore, ProfileResult } from "./scoring";
+import {
+  assessmentMethodology,
+  type AnswerMap,
+  type CategoryScore,
+  type ProfileResult
+} from "./scoring";
 
 type ExportPartWorkbookOptions = {
   playerName: string;
@@ -139,9 +144,12 @@ function responseHeaders(chapterId: ChapterId) {
     "ความหมายคำตอบ",
     "คะแนนดิบหมวด",
     "คะแนนเต็มหมวด",
-    "Norm",
-    "Power (0-100)",
-    "ระดับ"
+    "Norm Score",
+    "คะแนนแสดงผล (0-100)",
+    "Reference Mean",
+    "Reference Low",
+    "Reference High",
+    "ผลเทียบอ้างอิง"
   );
 
   return headers;
@@ -169,6 +177,9 @@ function responseRow(question: Question, answers: AnswerMap, score?: CategorySco
     score?.max,
     score?.normScore,
     score?.percent,
+    score?.reference?.mean,
+    score?.reference?.low,
+    score?.reference?.high,
     score?.levelLabel
   );
 
@@ -177,8 +188,8 @@ function responseRow(question: Question, answers: AnswerMap, score?: CategorySco
 
 function setResponseColumnWidths(worksheet: Worksheet, chapterId: ChapterId) {
   const widths = chapterId === "bigFive"
-    ? [7, 16, 24, 22, 34, 34, 24, 24, 24, 24, 14, 34, 16, 16, 12, 16, 18]
-    : [7, 16, 24, 22, 48, 48, 14, 34, 16, 16, 12, 16, 18];
+    ? [7, 16, 24, 22, 34, 34, 24, 24, 24, 24, 14, 34, 16, 16, 14, 18, 16, 16, 16, 34]
+    : [7, 16, 24, 22, 48, 48, 14, 34, 16, 16, 14, 18, 16, 16, 16, 34];
 
   widths.forEach((width, index) => {
     worksheet.getColumn(index + 1).width = width;
@@ -238,9 +249,12 @@ function addSummarySheet(
     "Category (EN)",
     "คะแนนดิบ",
     "คะแนนเต็ม",
-    "Norm",
-    "Power (0-100)",
-    "ระดับ",
+    "Norm Score",
+    "คะแนนแสดงผล (0-100)",
+    "Reference Mean",
+    "Reference Low",
+    "Reference High",
+    "ผลเทียบอ้างอิง",
     "คำอธิบาย"
   ];
   const worksheet = workbook.addWorksheet("สรุปคะแนน", {
@@ -262,6 +276,9 @@ function addSummarySheet(
       score.max,
       score.normScore,
       score.percent,
+      score.reference?.mean,
+      score.reference?.low,
+      score.reference?.high,
       score.levelLabel,
       score.note
     ]);
@@ -295,7 +312,7 @@ function addSummarySheet(
   styleHeader(worksheet.getRow(6), partAccent[chapterId]);
   styleDataRows(worksheet, dataStartRow, dataEndRow, {
     rowHeight: 42,
-    leftAlignedColumns: [1, 2, 8]
+    leftAlignedColumns: [1, 2, 10, 11]
   });
 
   const totalRow = worksheet.getRow(totalRowNumber);
@@ -307,13 +324,53 @@ function addSummarySheet(
     cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   }
 
-  [28, 24, 14, 14, 12, 16, 18, 54].forEach((width, index) => {
+  [28, 24, 14, 14, 14, 18, 16, 16, 16, 34, 54].forEach((width, index) => {
     worksheet.getColumn(index + 1).width = width;
   });
   worksheet.autoFilter = {
     from: { row: 6, column: 1 },
     to: { row: dataEndRow, column: headers.length }
   };
+}
+
+function addMethodologySheet(
+  workbook: import("exceljs").Workbook,
+  chapterId: ChapterId
+) {
+  const methodology = assessmentMethodology[chapterId];
+  const worksheet = workbook.addWorksheet("วิธีคำนวณ", {
+    views: [{ showGridLines: false }]
+  });
+  const rows = [
+    ["ส่วนแบบประเมิน", methodology.title],
+    ["วิธีคำนวณ", methodology.calculation],
+    ["แหล่งอ้างอิง", methodology.source],
+    ["หมายเหตุ", methodology.note],
+    [
+      "ข้อจำกัด",
+      "ผลลัพธ์ใช้เพื่อการเรียนการสอนและการสะท้อนตนเอง ไม่ใช่การวินิจฉัยทางจิตวิทยาหรือการประเมินทางคลินิก"
+    ]
+  ];
+
+  worksheet.addRow([`Future Self Quest - ${methodology.title} วิธีคำนวณและแหล่งอ้างอิง`]);
+  rows.forEach((row) => worksheet.addRow(row));
+  styleTitle(worksheet, 6, partAccent[chapterId]);
+
+  for (let rowNumber = 2; rowNumber <= rows.length + 1; rowNumber += 1) {
+    worksheet.mergeCells(rowNumber, 2, rowNumber, 6);
+    const label = worksheet.getCell(rowNumber, 1);
+    const detail = worksheet.getCell(rowNumber, 2);
+    label.font = { name: "Aptos", size: 11, bold: true, color: { argb: colors.muted } };
+    detail.font = { name: "Aptos", size: 11, color: { argb: colors.navy } };
+    label.alignment = { vertical: "top", wrapText: true };
+    detail.alignment = { vertical: "top", wrapText: true };
+    worksheet.getRow(rowNumber).height = rowNumber === 3 ? 56 : 44;
+  }
+
+  worksheet.getColumn(1).width = 22;
+  for (let columnNumber = 2; columnNumber <= 6; columnNumber += 1) {
+    worksheet.getColumn(columnNumber).width = 22;
+  }
 }
 
 function downloadWorkbook(buffer: ArrayBuffer, filename: string) {
@@ -349,6 +406,7 @@ export async function exportPartWorkbook({
 
   addResponseSheet(workbook, chapterId, playerName, answers, chapterScores);
   addSummarySheet(workbook, chapterId, playerName, chapterScores);
+  addMethodologySheet(workbook, chapterId);
 
   const buffer = await workbook.xlsx.writeBuffer();
   const filename = `Future-Self-Quest-${safePlayerName(playerName)}-${partSlug[chapterId]}.xlsx`;
