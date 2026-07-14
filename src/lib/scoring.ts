@@ -12,6 +12,7 @@ export type CategoryScore = {
   max: number;
   normScore?: number;
   percent: number;
+  exactPercent: number;
   itemCount: number;
   level: Level;
   levelLabel: string;
@@ -341,7 +342,8 @@ function scoreCategories(answers: AnswerMap): CategoryScore[] {
       percent = 100 - percent;
     }
 
-    const safePercent = Math.round(clamp(percent));
+    const exactPercent = clamp(percent);
+    const safePercent = Math.round(exactPercent);
     const level = levelFromPercent(safePercent);
 
     return {
@@ -352,6 +354,7 @@ function scoreCategories(answers: AnswerMap): CategoryScore[] {
       max,
       normScore,
       percent: safePercent,
+      exactPercent,
       itemCount: items.length,
       level,
       levelLabel: levelLabel(level),
@@ -361,10 +364,14 @@ function scoreCategories(answers: AnswerMap): CategoryScore[] {
 }
 
 function getPercent(scoreByKey: Map<CategoryKey, CategoryScore>, key: CategoryKey) {
-  return scoreByKey.get(key)?.percent ?? 0;
+  return scoreByKey.get(key)?.exactPercent ?? 0;
 }
 
-function buildRpgStats(scoreByKey: Map<CategoryKey, CategoryScore>): RpgStat[] {
+type CalculatedRpgStat = RpgStat & { exactValue: number };
+
+const careerStatKeys: RpgStatKey[] = ["STR", "AGI", "INT", "DEX", "LUK"];
+
+function buildRpgStats(scoreByKey: Map<CategoryKey, CategoryScore>): CalculatedRpgStat[] {
   const stats: Array<[RpgStatKey, CategoryKey[]]> = [
     ["STR", ["managingSelf", "selfManagement", "conscientiousness"]],
     ["AGI", ["openness", "change", "acrossCultures"]],
@@ -374,11 +381,16 @@ function buildRpgStats(scoreByKey: Map<CategoryKey, CategoryScore>): RpgStat[] {
     ["LUK", ["socialSkills", "sociability", "teams"]]
   ];
 
-  return stats.map(([key, sourceKeys]) => ({
-    key,
-    ...statLabels[key],
-    value: Math.round(average(sourceKeys.map((sourceKey) => getPercent(scoreByKey, sourceKey))))
-  }));
+  return stats.map(([key, sourceKeys]) => {
+    const exactValue = average(sourceKeys.map((sourceKey) => getPercent(scoreByKey, sourceKey)));
+
+    return {
+      key,
+      ...statLabels[key],
+      value: Math.round(exactValue),
+      exactValue
+    };
+  });
 }
 
 function buildSummary(scores: CategoryScore[], rpgStats: RpgStat[]) {
@@ -400,7 +412,9 @@ export function calculateProfile(answers: AnswerMap): ProfileResult {
   const categoryScores = scoreCategories(answers);
   const scoreByKey = new Map(categoryScores.map((score) => [score.key, score]));
   const rpgStats = buildRpgStats(scoreByKey);
-  const dominantStat = [...rpgStats].sort((a, b) => b.value - a.value)[0] ?? rpgStats[0];
+  const dominantStat = rpgStats
+    .filter((stat) => careerStatKeys.includes(stat.key))
+    .sort((a, b) => b.exactValue - a.exactValue)[0] ?? rpgStats[0];
   const classProfile = classProfiles[dominantStat.key];
   const { summary, strengths, growth } = buildSummary(categoryScores, rpgStats);
 

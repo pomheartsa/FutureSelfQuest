@@ -35,10 +35,11 @@ import {
 import { exportPartWorkbook } from "@/lib/export-excel";
 
 const STORAGE_KEY = "future-self-quest-state-v1";
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.1.1";
 const UPDATE_STORAGE_KEY = `future-self-quest-update-${APP_VERSION}`;
 
 const releaseNotes = [
+  "ปรับสมดุลสูตรเลือกอาชีพให้ทั้ง 5 อาชีพมีโอกาสเป็นผลลัพธ์อย่างเหมาะสม",
   "เพิ่มผลลัพธ์ 5 อาชีพ: Swordman, Mage, Archer, Acolyte และ Merchant",
   "เพิ่มภาพตัวละครชายและหญิงให้ตรงกับเพศที่เลือก",
   "ซ่อนอาชีพไว้จนกว่าจะตอบแบบประเมินครบทั้ง 127 ข้อ",
