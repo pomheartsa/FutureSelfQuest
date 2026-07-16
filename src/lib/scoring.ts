@@ -75,9 +75,9 @@ export const assessmentMethodology: Record<
   },
   competency: {
     title: "Professional Competencies",
-    calculation: "รวมคะแนน 10 ข้อของแต่ละสมรรถนะบนมาตร 1-10 ได้คะแนนรายด้าน 10-100 แล้วเทียบกับ Mean และช่วงอ้างอิง 68%",
+    calculation: "รวมคะแนน 10 ข้อของแต่ละสมรรถนะบนมาตร 1-10 ได้คะแนนรายด้าน 10-100 แล้วเทียบกับ Mean และช่วงคะแนนของคนส่วนใหญ่ประมาณ 68%",
     source: "Professional Competencies Plot Graph: competencies rated by experienced managers and managerial professionals",
-    note: "ช่วงอ้างอิงใช้เพื่อเปรียบเทียบกับ managerial population ตามเอกสารประกอบการสอน ไม่ใช่คะแนนผ่านหรือตก"
+    note: "ช่วงคนส่วนใหญ่ประมาณ 68% ใช้เปรียบเทียบกับ managerial population ตามเอกสารประกอบการสอน ไม่ใช่คะแนนผ่านหรือตก"
   }
 };
 
@@ -447,10 +447,10 @@ function referenceFor(
     if (!benchmark) return undefined;
     const label =
       raw < benchmark.low
-        ? "ต่ำกว่าช่วงอ้างอิง 68%"
+        ? "อยู่ในกลุ่มคนส่วนน้อย (คะแนนต่ำกว่าช่วงของคนส่วนใหญ่)"
         : raw > benchmark.high
-          ? "สูงกว่าช่วงอ้างอิง 68%"
-          : "อยู่ในช่วงอ้างอิง 68%";
+          ? "อยู่ในกลุ่มคนส่วนน้อย (คะแนนสูงกว่าช่วงของคนส่วนใหญ่)"
+          : "อยู่ในกลุ่มคนส่วนใหญ่";
     return {
       kind: "competency-benchmark",
       ...benchmark,

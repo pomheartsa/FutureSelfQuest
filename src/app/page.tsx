@@ -6,7 +6,9 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   Download,
+  HeartHandshake,
   LockKeyhole,
   Medal,
   Play,
@@ -15,9 +17,10 @@ import {
   ShieldCheck,
   Sparkles,
   UserRound,
+  UsersRound,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   chapters,
   competencyScaleAnchors,
@@ -35,13 +38,28 @@ import {
   type RpgStat
 } from "@/lib/scoring";
 import { exportPartWorkbook } from "@/lib/export-excel";
+import {
+  calculateEngagementResult,
+  calculateLeadershipStyleResult,
+  engagementQuestions,
+  engagementScale,
+  leadershipStyleQuestions,
+  type SideAnswerMap,
+  type SideAssessmentResult,
+  type SideQuestId
+} from "@/lib/side-assessments";
 
 const SESSION_STORAGE_KEY = "future-self-quest-session-v2";
 const LEGACY_STORAGE_KEY = "future-self-quest-state-v1";
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.4.0";
 const UPDATE_STORAGE_KEY = `future-self-quest-update-${APP_VERSION}`;
 
 const releaseNotes = [
+  "เพิ่มกระดานเลือกแบบประเมิน แยก Main Quest ออกจากแบบทดสอบเสริม",
+  "เพิ่ม Engagement Survey 22 ข้อ และแบบทดสอบสไตล์ผู้นำ 8 ข้อพร้อมผลลัพธ์",
+  "ปรับคำอธิบายผล Pro ให้แสดงว่าอยู่ในกลุ่มคนส่วนใหญ่หรือกลุ่มคนส่วนน้อย",
+  "เพิ่มกราฟ Big Five Locator และกราฟเทียบคะแนน Professional Competencies กับ Mean และช่วง 68%",
+  "ปรับสเกลคำตอบ Professional Competencies 1-10 ให้เป็นแท่งเลือกคะแนนแบบต่อเนื่อง",
   "แก้ไขสถานะแบบประเมินค้างหลังปิดเว็บ โดยเริ่มใหม่เมื่อเปิดแท็บครั้งถัดไป",
   "เพิ่มคะแนนดิบ Norm Score ค่า Mean และช่วงอ้างอิงจากเอกสารประกอบการสอน",
   "เพิ่มหัวข้อวิธีคำนวณ แหล่งอ้างอิง และข้อจำกัดของแบบประเมิน",
@@ -59,6 +77,7 @@ function cx(...classes: Array<string | false | null | undefined>) {
 type BodyType = "female" | "male";
 type Gender = "female" | "male";
 type JobId = "acolyte" | "archer" | "mage" | "merchant" | "sword";
+type AppView = "registration" | "hub" | "core" | SideQuestId;
 
 type AvatarConfig = {
   jobId: JobId;
@@ -135,6 +154,67 @@ function normalizeAvatarConfig(value?: Partial<AvatarConfig>): AvatarConfig {
     next.jobId = defaultAvatarConfig.jobId;
   }
   return { jobId: next.jobId, bodyType: next.bodyType === "male" ? "male" : "female" };
+}
+
+function clampStoredIndex(value: unknown, total: number) {
+  if (typeof value !== "number" || !Number.isInteger(value)) return 0;
+  return Math.max(0, Math.min(value, total - 1));
+}
+
+function normalizeAppView(value: unknown, legacyStarted?: boolean): AppView {
+  if (
+    value === "registration" ||
+    value === "hub" ||
+    value === "core" ||
+    value === "engagement" ||
+    value === "leadershipStyle"
+  ) {
+    return value;
+  }
+  return legacyStarted ? "core" : "registration";
+}
+
+function sanitizeCoreAnswers(value: unknown): AnswerMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  const sanitized: AnswerMap = {};
+
+  questions.forEach((question) => {
+    const answer = source[question.id];
+    const max = question.kind === "eq" ? 4 : question.kind === "bigFive" ? 5 : 10;
+    if (typeof answer === "number" && Number.isInteger(answer) && answer >= 1 && answer <= max) {
+      sanitized[question.id] = answer;
+    }
+  });
+
+  return sanitized;
+}
+
+function sanitizeSideAnswers(value: unknown, questId: SideQuestId): SideAnswerMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  const sanitized: SideAnswerMap = {};
+  const validIds =
+    questId === "engagement"
+      ? new Set(engagementQuestions.map((question) => question.id))
+      : new Set(leadershipStyleQuestions.map((question) => question.id));
+  const max = questId === "engagement" ? 5 : 3;
+
+  Object.entries(source).forEach(([idText, answer]) => {
+    const id = Number(idText);
+    if (
+      Number.isInteger(id) &&
+      validIds.has(id) &&
+      typeof answer === "number" &&
+      Number.isInteger(answer) &&
+      answer >= 1 &&
+      answer <= max
+    ) {
+      sanitized[id] = answer;
+    }
+  });
+
+  return sanitized;
 }
 
 function getSelectedJob(avatarConfig: AvatarConfig) {
@@ -274,11 +354,24 @@ export default function Home() {
   const [gender, setGender] = useState<Gender | null>(null);
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [started, setStarted] = useState(false);
+  const [appView, setAppView] = useState<AppView>("registration");
   const [showResult, setShowResult] = useState(false);
+  const [sideAnswers, setSideAnswers] = useState<Record<SideQuestId, SideAnswerMap>>({
+    engagement: {},
+    leadershipStyle: {}
+  });
+  const [sideCurrentIndex, setSideCurrentIndex] = useState<Record<SideQuestId, number>>({
+    engagement: 0,
+    leadershipStyle: 0
+  });
+  const [sideShowResult, setSideShowResult] = useState<Record<SideQuestId, boolean>>({
+    engagement: false,
+    leadershipStyle: false
+  });
   const [showUpdate, setShowUpdate] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>(defaultAvatarConfig);
+  const navigationGeneration = useRef(0);
 
   const profile = useMemo(() => calculateProfile(answers), [answers]);
   const currentQuestion = questions[currentIndex] ?? questions[0];
@@ -295,17 +388,50 @@ export default function Home() {
           answers?: AnswerMap;
           currentIndex?: number;
           started?: boolean;
+          appView?: AppView;
           showResult?: boolean;
           gender?: Gender;
           avatarConfig?: Partial<AvatarConfig>;
+          sideAnswers?: Partial<Record<SideQuestId, SideAnswerMap>>;
+          sideCurrentIndex?: Partial<Record<SideQuestId, number>>;
+          sideShowResult?: Partial<Record<SideQuestId, boolean>>;
         };
-        setPlayerName(saved.playerName || "");
-        setAnswers(saved.answers || {});
-        setCurrentIndex(Math.min(saved.currentIndex || 0, questions.length - 1));
-        setStarted(Boolean(saved.started));
+        setPlayerName(
+          typeof saved.playerName === "string" ? saved.playerName.slice(0, 28) : ""
+        );
+        setAnswers(sanitizeCoreAnswers(saved.answers));
+        setCurrentIndex(clampStoredIndex(saved.currentIndex, questions.length));
+        setAppView(normalizeAppView(saved.appView, saved.started));
         setShowResult(Boolean(saved.showResult));
-        setGender(saved.gender || saved.avatarConfig?.bodyType || null);
+        setGender(
+          saved.gender === "male" || saved.gender === "female"
+            ? saved.gender
+            : saved.avatarConfig?.bodyType === "male" || saved.avatarConfig?.bodyType === "female"
+              ? saved.avatarConfig.bodyType
+              : null
+        );
         setAvatarConfig(normalizeAvatarConfig(saved.avatarConfig));
+        setSideAnswers({
+          engagement: sanitizeSideAnswers(saved.sideAnswers?.engagement, "engagement"),
+          leadershipStyle: sanitizeSideAnswers(
+            saved.sideAnswers?.leadershipStyle,
+            "leadershipStyle"
+          )
+        });
+        setSideCurrentIndex({
+          engagement: clampStoredIndex(
+            saved.sideCurrentIndex?.engagement,
+            engagementQuestions.length
+          ),
+          leadershipStyle: clampStoredIndex(
+            saved.sideCurrentIndex?.leadershipStyle,
+            leadershipStyleQuestions.length
+          )
+        });
+        setSideShowResult({
+          engagement: Boolean(saved.sideShowResult?.engagement),
+          leadershipStyle: Boolean(saved.sideShowResult?.leadershipStyle)
+        });
       } catch {
         window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
       }
@@ -318,34 +444,69 @@ export default function Home() {
     if (!hydrated) return;
     window.sessionStorage.setItem(
       SESSION_STORAGE_KEY,
-      JSON.stringify({ playerName, gender, answers, currentIndex, started, showResult, avatarConfig })
+      JSON.stringify({
+        playerName,
+        gender,
+        answers,
+        currentIndex,
+        appView,
+        showResult,
+        avatarConfig,
+        sideAnswers,
+        sideCurrentIndex,
+        sideShowResult
+      })
     );
-  }, [answers, avatarConfig, currentIndex, gender, hydrated, playerName, showResult, started]);
+  }, [
+    answers,
+    appView,
+    avatarConfig,
+    currentIndex,
+    gender,
+    hydrated,
+    playerName,
+    showResult,
+    sideAnswers,
+    sideCurrentIndex,
+    sideShowResult
+  ]);
 
   function beginQuest() {
     if (!playerName.trim() || !gender) return;
-    setStarted(true);
-    setShowResult(false);
-    setCurrentIndex(0);
+    navigationGeneration.current += 1;
+    setAppView("hub");
+  }
+
+  function startCoreQuest() {
+    navigationGeneration.current += 1;
+    setAppView("core");
+    setShowResult(isComplete);
+    if (Object.keys(answers).length === 0) setCurrentIndex(0);
   }
 
   function restart() {
+    navigationGeneration.current += 1;
     setAnswers({});
     setCurrentIndex(0);
     setShowResult(false);
-    setStarted(false);
+    setAppView("registration");
     setPlayerName("");
     setGender(null);
     setAvatarConfig(defaultAvatarConfig);
+    setSideAnswers({ engagement: {}, leadershipStyle: {} });
+    setSideCurrentIndex({ engagement: 0, leadershipStyle: 0 });
+    setSideShowResult({ engagement: false, leadershipStyle: false });
     window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
   }
 
   function answerCurrent(value: number) {
     const answeredIndex = currentIndex;
     const nextAnswers = { ...answers, [currentQuestion.id]: value };
+    const generation = ++navigationGeneration.current;
     setAnswers(nextAnswers);
 
     window.setTimeout(() => {
+      if (navigationGeneration.current !== generation) return;
       if (answeredIndex === questions.length - 1) {
         if (Object.keys(nextAnswers).length === questions.length) {
           setShowResult(true);
@@ -358,16 +519,83 @@ export default function Home() {
   }
 
   function goPrevious() {
+    navigationGeneration.current += 1;
     setShowResult(false);
     setCurrentIndex((index) => Math.max(0, index - 1));
   }
 
   function goNext() {
+    navigationGeneration.current += 1;
     if (currentIndex === questions.length - 1) {
       if (isComplete) setShowResult(true);
       return;
     }
     setCurrentIndex((index) => Math.min(questions.length - 1, index + 1));
+  }
+
+  function sideQuestionCount(questId: SideQuestId) {
+    return questId === "engagement" ? engagementQuestions.length : leadershipStyleQuestions.length;
+  }
+
+  function answerSideQuestion(questId: SideQuestId, questionId: number, value: number) {
+    const answeredIndex = sideCurrentIndex[questId];
+    const nextAnswers = { ...sideAnswers[questId], [questionId]: value };
+    const total = sideQuestionCount(questId);
+    const generation = ++navigationGeneration.current;
+
+    setSideAnswers((current) => ({ ...current, [questId]: nextAnswers }));
+
+    window.setTimeout(() => {
+      if (navigationGeneration.current !== generation) return;
+      if (answeredIndex === total - 1) {
+        if (Object.keys(nextAnswers).length === total) {
+          setSideShowResult((current) => ({ ...current, [questId]: true }));
+        }
+        return;
+      }
+
+      setSideCurrentIndex((current) => ({
+        ...current,
+        [questId]: current[questId] === answeredIndex ? answeredIndex + 1 : current[questId]
+      }));
+    }, 170);
+  }
+
+  function goSidePrevious(questId: SideQuestId) {
+    navigationGeneration.current += 1;
+    setSideShowResult((current) => ({ ...current, [questId]: false }));
+    setSideCurrentIndex((current) => ({
+      ...current,
+      [questId]: Math.max(0, current[questId] - 1)
+    }));
+  }
+
+  function goSideNext(questId: SideQuestId) {
+    navigationGeneration.current += 1;
+    const total = sideQuestionCount(questId);
+    const index = sideCurrentIndex[questId];
+    if (index === total - 1) {
+      if (Object.keys(sideAnswers[questId]).length === total) {
+        setSideShowResult((current) => ({ ...current, [questId]: true }));
+      }
+      return;
+    }
+    setSideCurrentIndex((current) => ({
+      ...current,
+      [questId]: Math.min(total - 1, current[questId] + 1)
+    }));
+  }
+
+  function restartSideQuest(questId: SideQuestId) {
+    navigationGeneration.current += 1;
+    setSideAnswers((current) => ({ ...current, [questId]: {} }));
+    setSideCurrentIndex((current) => ({ ...current, [questId]: 0 }));
+    setSideShowResult((current) => ({ ...current, [questId]: false }));
+  }
+
+  function backToQuestHub() {
+    navigationGeneration.current += 1;
+    setAppView("hub");
   }
 
   function closeUpdate() {
@@ -387,7 +615,7 @@ export default function Home() {
     return <main className="quest-shell min-h-svh" />;
   }
 
-  if (!started) {
+  if (appView === "registration") {
     return (
       <>
         <main className="quest-shell flex min-h-svh items-center px-4 py-6 sm:px-6 lg:px-10">
@@ -407,7 +635,80 @@ export default function Home() {
     );
   }
 
-  if (showResult && isComplete) {
+  if (appView === "hub") {
+    return (
+      <>
+        <main className="quest-shell min-h-svh px-4 py-6 sm:px-6 lg:px-10">
+          <QuestHubScreen
+            playerName={playerName}
+            gender={gender}
+            coreAnswered={profile.answeredCount}
+            engagementAnswered={Object.keys(sideAnswers.engagement).length}
+            leadershipAnswered={Object.keys(sideAnswers.leadershipStyle).length}
+            onSelect={(questId) => {
+              if (questId === "core") {
+                startCoreQuest();
+              } else {
+                if (Object.keys(sideAnswers[questId]).length === sideQuestionCount(questId)) {
+                  setSideShowResult((current) => ({ ...current, [questId]: true }));
+                }
+                setAppView(questId);
+              }
+            }}
+            onReset={restart}
+          />
+        </main>
+        {appOverlays}
+      </>
+    );
+  }
+
+  if (appView === "engagement" || appView === "leadershipStyle") {
+    const questId = appView;
+    const result =
+      questId === "engagement"
+        ? calculateEngagementResult(sideAnswers[questId])
+        : calculateLeadershipStyleResult(sideAnswers[questId]);
+
+    return (
+      <>
+        <main className="quest-shell min-h-svh px-4 py-5 sm:px-6 lg:px-10">
+          {sideShowResult[questId] && result ? (
+            <SideAssessmentResultScreen
+              questId={questId}
+              playerName={playerName}
+              result={result}
+              onBackToAnswers={() => {
+                navigationGeneration.current += 1;
+                setSideShowResult((current) => ({ ...current, [questId]: false }));
+                setSideCurrentIndex((current) => ({
+                  ...current,
+                  [questId]: sideQuestionCount(questId) - 1
+                }));
+              }}
+              onBackToHub={backToQuestHub}
+              onRestart={() => restartSideQuest(questId)}
+            />
+          ) : (
+            <SideAssessmentScreen
+              questId={questId}
+              playerName={playerName}
+              gender={gender}
+              answers={sideAnswers[questId]}
+              currentIndex={sideCurrentIndex[questId]}
+              onAnswer={(questionId, value) => answerSideQuestion(questId, questionId, value)}
+              onPrevious={() => goSidePrevious(questId)}
+              onNext={() => goSideNext(questId)}
+              onBackToHub={backToQuestHub}
+            />
+          )}
+        </main>
+        {appOverlays}
+      </>
+    );
+  }
+
+  if (appView === "core" && showResult && isComplete) {
     return (
       <>
         <main className="quest-shell min-h-svh px-4 py-6 sm:px-6 lg:px-10">
@@ -418,7 +719,9 @@ export default function Home() {
             answers={answers}
             profile={profile}
             onRestart={restart}
+            onBackToHub={backToQuestHub}
             onBack={() => {
+              navigationGeneration.current += 1;
               setShowResult(false);
               setCurrentIndex(questions.length - 1);
             }}
@@ -443,10 +746,417 @@ export default function Home() {
           onNext={goNext}
           onPrevious={goPrevious}
           onRestart={restart}
+          onBackToHub={backToQuestHub}
         />
       </main>
       {appOverlays}
     </>
+  );
+}
+
+function QuestHubScreen({
+  playerName,
+  gender,
+  coreAnswered,
+  engagementAnswered,
+  leadershipAnswered,
+  onSelect,
+  onReset
+}: {
+  playerName: string;
+  gender: Gender | null;
+  coreAnswered: number;
+  engagementAnswered: number;
+  leadershipAnswered: number;
+  onSelect: (questId: "core" | SideQuestId) => void;
+  onReset: () => void;
+}) {
+  const quests = [
+    {
+      id: "core" as const,
+      eyebrow: "MAIN QUEST",
+      title: "Future Self Quest",
+      description: "EQ, Big Five และ Professional Competencies เพื่อค้นหาอาชีพที่เข้ากับคุณ",
+      answered: coreAnswered,
+      total: questions.length,
+      duration: "ประมาณ 20-25 นาที",
+      accent: "#2f6fb6",
+      icon: <ShieldCheck size={25} />
+    },
+    {
+      id: "engagement" as const,
+      eyebrow: "SIDE QUEST",
+      title: "ความผูกพันต่อองค์กร",
+      description: "สำรวจความเชื่อมั่น ความภาคภูมิใจ และพลังที่คุณมีต่อองค์กร",
+      answered: engagementAnswered,
+      total: engagementQuestions.length,
+      duration: "ประมาณ 5-7 นาที",
+      accent: "#39a7a5",
+      icon: <HeartHandshake size={25} />
+    },
+    {
+      id: "leadershipStyle" as const,
+      eyebrow: "SIDE QUEST",
+      title: "สไตล์ผู้นำ",
+      description: "ค้นหารูปแบบการบริหารทีมที่คุณใช้บ่อย พร้อมจุดเด่นและสิ่งที่ควรระวัง",
+      answered: leadershipAnswered,
+      total: leadershipStyleQuestions.length,
+      duration: "ประมาณ 3-4 นาที",
+      accent: "#b84f73",
+      icon: <UsersRound size={25} />
+    }
+  ];
+
+  return (
+    <section className="mx-auto max-w-6xl animate-rise">
+      <header className="flex flex-col gap-5 border-b border-[#cdddf0] pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="inline-flex items-center gap-2 text-sm font-black uppercase tracking-[0.18em] text-[#61799b]">
+            <ClipboardList size={17} />
+            Quest Board
+          </p>
+          <h1 className="mt-2 text-4xl font-black leading-tight text-[#223656] sm:text-6xl">
+            เลือกแบบประเมิน
+          </h1>
+          <p className="mt-3 max-w-2xl text-base leading-7 text-[#586984]">
+            แต่ละแบบแยกจากกัน ทำชุดไหนก่อนก็ได้ และกลับมาทำชุดอื่นต่อได้ตลอดในแท็บนี้
+          </p>
+        </div>
+        <div className="flex items-center justify-between gap-4 rounded-[8px] border border-white/75 bg-white/65 px-4 py-3 sm:min-w-64">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">Adventurer</p>
+            <p className="text-xl font-black text-[#24324b]">{playerName}</p>
+            <p className="text-xs font-bold text-[#61799b]">{genderLabel(gender)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onReset}
+            title="ล้างข้อมูลทั้งหมดและกลับหน้าลงทะเบียน"
+            className="grid h-10 w-10 place-items-center rounded-[8px] border border-[#c5d6ea] bg-white/75 text-[#38516f] transition hover:bg-white"
+          >
+            <RotateCcw size={17} />
+          </button>
+        </div>
+      </header>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        {quests.map((quest, index) => {
+          const progress = Math.round((quest.answered / quest.total) * 100);
+          const completed = quest.answered === quest.total;
+          return (
+            <article
+              key={quest.id}
+              className={cx(
+                "panel group flex min-h-[340px] flex-col rounded-[8px] p-5 transition duration-300 hover:-translate-y-1 hover:bg-white/95",
+                index === 0 && "lg:min-h-[380px]"
+              )}
+              style={{ borderTop: `5px solid ${quest.accent}` }}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <span
+                  className="grid h-12 w-12 place-items-center rounded-[8px] text-white shadow-lg"
+                  style={{ backgroundColor: quest.accent }}
+                >
+                  {quest.icon}
+                </span>
+                <span className="rounded-[6px] border border-[#cdddf0] bg-white/70 px-2.5 py-1 text-xs font-black text-[#61799b]">
+                  {quest.total} ข้อ
+                </span>
+              </div>
+
+              <p className="mt-6 text-xs font-black uppercase tracking-[0.18em]" style={{ color: quest.accent }}>
+                {quest.eyebrow}
+              </p>
+              <h2 className="mt-2 text-2xl font-black leading-tight text-[#24324b]">{quest.title}</h2>
+              <p className="mt-3 flex-1 text-sm leading-7 text-[#667393]">{quest.description}</p>
+
+              <div className="mt-5">
+                <div className="flex justify-between text-xs font-bold text-[#667393]">
+                  <span>{quest.duration}</span>
+                  <span>{quest.answered}/{quest.total}</span>
+                </div>
+                <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[#e3edf8]">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${progress}%`, backgroundColor: quest.accent }}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onSelect(quest.id)}
+                className="mt-5 inline-flex h-12 items-center justify-center gap-2 rounded-[8px] text-sm font-black text-white transition hover:-translate-y-0.5"
+                style={{ backgroundColor: quest.accent }}
+              >
+                {completed ? "ดูผลลัพธ์" : quest.answered > 0 ? "ทำต่อ" : "เริ่มทำ"}
+                <ChevronRight size={17} />
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SideAssessmentScreen({
+  questId,
+  playerName,
+  gender,
+  answers,
+  currentIndex,
+  onAnswer,
+  onPrevious,
+  onNext,
+  onBackToHub
+}: {
+  questId: SideQuestId;
+  playerName: string;
+  gender: Gender | null;
+  answers: SideAnswerMap;
+  currentIndex: number;
+  onAnswer: (questionId: number, value: number) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onBackToHub: () => void;
+}) {
+  const isEngagement = questId === "engagement";
+  const question = isEngagement
+    ? engagementQuestions[currentIndex]
+    : leadershipStyleQuestions[currentIndex];
+  const total = isEngagement ? engagementQuestions.length : leadershipStyleQuestions.length;
+  const answered = Object.keys(answers).length;
+  const selected = answers[question.id];
+  const accent = isEngagement ? "#39a7a5" : "#b84f73";
+  const title = isEngagement ? "ความผูกพันต่อองค์กร" : "แบบทดสอบสไตล์ผู้นำ";
+  const short = isEngagement ? "ENGAGEMENT" : "LEADERSHIP STYLE";
+
+  return (
+    <section className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="panel animate-rise rounded-[8px] p-5 lg:sticky lg:top-5 lg:h-fit">
+        <button
+          type="button"
+          onClick={onBackToHub}
+          className="inline-flex h-10 items-center gap-2 text-sm font-black text-[#38516f] transition hover:text-[#2f6fb6]"
+        >
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+
+        <div className="mt-5 flex items-center gap-3">
+          <span className="grid h-12 w-12 place-items-center rounded-[8px] text-white" style={{ backgroundColor: accent }}>
+            {isEngagement ? <HeartHandshake size={24} /> : <UsersRound size={24} />}
+          </span>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-[#71809a]">{short}</p>
+            <p className="font-black text-[#24324b]">{title}</p>
+          </div>
+        </div>
+
+        <div className="mt-6 border-t border-[#cdddf0] pt-5">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">ผู้ทำแบบประเมิน</p>
+          <p className="mt-1 text-xl font-black text-[#24324b]">{playerName}</p>
+          <p className="text-sm font-bold text-[#61799b]">{genderLabel(gender)}</p>
+        </div>
+
+        <div className="mt-6">
+          <div className="flex items-end justify-between">
+            <p className="text-3xl font-black text-[#24324b]">{Math.round((answered / total) * 100)}%</p>
+            <p className="text-sm font-bold text-[#667393]">{answered}/{total}</p>
+          </div>
+          <div className="mt-2 h-3 overflow-hidden rounded-full bg-white/75">
+            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(answered / total) * 100}%`, backgroundColor: accent }} />
+          </div>
+        </div>
+      </aside>
+
+      <section className="panel animate-rise rounded-[8px] p-5 sm:p-7">
+        <div className="flex flex-col gap-3 border-b border-[#cdddf0] pb-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em]" style={{ color: accent }}>{short}</p>
+            <h1 className="mt-1 text-3xl font-black text-[#24324b]">{title}</h1>
+          </div>
+          <span className="rounded-[8px] border border-[#cdddf0] bg-white/65 px-3 py-1.5 text-sm font-black text-[#61799b]">
+            ข้อ {currentIndex + 1} จาก {total}
+          </span>
+        </div>
+
+        <div className="mt-8 animate-fade" key={`${questId}-${question.id}`}>
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-[#71809a]">Item {question.id}</p>
+          <h2 className="mt-3 max-w-4xl text-2xl font-black leading-relaxed text-[#24324b] sm:text-3xl">
+            {question.prompt}
+          </h2>
+
+          {isEngagement ? (
+            <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-5">
+              {engagementScale.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onAnswer(question.id, option.value)}
+                  className={cx(
+                    "min-h-24 rounded-[8px] border px-3 py-3 text-center transition hover:-translate-y-0.5",
+                    selected === option.value
+                      ? "border-[#2d8d8b] bg-[#39a7a5] text-white shadow-[0_16px_35px_rgba(57,167,165,0.24)]"
+                      : "border-[#c5d6ea] bg-white/70 text-[#38516f] hover:bg-white"
+                  )}
+                >
+                  <span className="block text-2xl font-black">{option.value}</span>
+                  <span className="mt-1 block text-xs font-bold leading-5 opacity-85">{option.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-8 grid gap-3">
+              {leadershipStyleQuestions[currentIndex].options.map((option) => (
+                    <button
+                      key={option.code}
+                      type="button"
+                      onClick={() => onAnswer(question.id, option.value)}
+                      className={cx(
+                        "grid min-h-16 grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-[8px] border px-4 py-3 text-left transition hover:-translate-y-0.5",
+                        selected === option.value
+                          ? "border-[#9d3f60] bg-[#b84f73] text-white shadow-[0_16px_35px_rgba(184,79,115,0.22)]"
+                          : "border-[#dfbeca] bg-white/70 text-[#38516f] hover:bg-white"
+                      )}
+                    >
+                      <span className={cx("grid h-10 w-10 place-items-center rounded-full border text-lg font-black", selected === option.value ? "border-white/50 bg-white/15" : "border-[#dfbeca] bg-[#fff2f6] text-[#b84f73]")}>
+                        {option.code}
+                      </span>
+                      <span className="font-bold leading-6">{option.label}</span>
+                    </button>
+                  ))}
+            </div>
+          )}
+        </div>
+
+        <footer className="mt-8 flex flex-col gap-3 border-t border-[#cdddf0] pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <button
+            type="button"
+            onClick={onPrevious}
+            disabled={currentIndex === 0}
+            className={cx(
+              "inline-flex h-12 items-center justify-center gap-2 rounded-[8px] border px-5 text-sm font-black",
+              currentIndex === 0
+                ? "cursor-not-allowed border-[#d7e3f1] bg-white/35 text-[#98a6bb]"
+                : "border-[#b8cce4] bg-white/75 text-[#38516f]"
+            )}
+          >
+            <ChevronLeft size={18} />
+            ย้อนกลับ
+          </button>
+          <p className="text-center text-sm font-bold text-[#667393]">คำตอบจะบันทึกไว้จนกว่าจะปิดแท็บ</p>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={selected === undefined}
+            className={cx(
+              "inline-flex h-12 items-center justify-center gap-2 rounded-[8px] px-5 text-sm font-black text-white",
+              selected === undefined ? "cursor-not-allowed bg-[#95abc6]" : "hover:-translate-y-0.5"
+            )}
+            style={selected === undefined ? undefined : { backgroundColor: accent }}
+          >
+            {currentIndex === total - 1 ? "ดูผลลัพธ์" : "ต่อไป"}
+            <ChevronRight size={18} />
+          </button>
+        </footer>
+      </section>
+    </section>
+  );
+}
+
+function SideAssessmentResultScreen({
+  questId,
+  playerName,
+  result,
+  onBackToAnswers,
+  onBackToHub,
+  onRestart
+}: {
+  questId: SideQuestId;
+  playerName: string;
+  result: SideAssessmentResult;
+  onBackToAnswers: () => void;
+  onBackToHub: () => void;
+  onRestart: () => void;
+}) {
+  const isEngagement = questId === "engagement";
+  const accent = isEngagement ? "#39a7a5" : "#b84f73";
+  const normalized = Math.round(
+    ((result.score - result.minScore) / (result.maxScore - result.minScore)) * 100
+  );
+  const ranges = isEngagement
+    ? ["22-49 ยังไม่มีความผูกพัน", "50-79 มีความผูกพันบ้าง", "80-110 มีความผูกพันมาก"]
+    : ["8-12 Autocratic", "13-19 Democratic", "20-24 Laissez-Faire"];
+
+  return (
+    <section className="mx-auto max-w-4xl animate-rise">
+      <div className="no-print mb-5 flex flex-wrap items-center justify-between gap-3">
+        <button type="button" onClick={onBackToHub} className="inline-flex h-11 items-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]">
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={onBackToAnswers} className="h-11 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]">
+            ดูคำตอบ
+          </button>
+          <button type="button" onClick={onRestart} className="inline-flex h-11 items-center gap-2 rounded-[8px] px-4 text-sm font-black text-white" style={{ backgroundColor: accent }}>
+            <RotateCcw size={16} />
+            ทำใหม่
+          </button>
+        </div>
+      </div>
+
+      <article className="panel rounded-[8px] p-5 sm:p-8">
+        <div className="flex flex-col gap-5 border-b border-[#cdddf0] pb-6 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em]" style={{ color: accent }}>
+              {isEngagement ? "ENGAGEMENT RESULT" : "LEADERSHIP STYLE RESULT"}
+            </p>
+            <p className="mt-2 text-sm font-bold text-[#667393]">{playerName}</p>
+            <h1 className="mt-2 text-4xl font-black leading-tight text-[#24324b] sm:text-5xl">{result.title}</h1>
+            {result.titleEn ? <p className="mt-2 text-lg font-black" style={{ color: accent }}>{result.titleEn}</p> : null}
+          </div>
+          <div className="min-w-32 rounded-[8px] border border-[#d5e3f4] bg-white/70 px-5 py-4 text-center">
+            <p className="text-xs font-black uppercase text-[#71809a]">Score</p>
+            <p className="mt-1 text-4xl font-black text-[#2d5f9c]">{result.score}</p>
+            <p className="text-xs font-bold text-[#667393]">จาก {result.maxScore}</p>
+          </div>
+        </div>
+
+        <div className="mt-7">
+          <div className="h-4 overflow-hidden rounded-full bg-[#e3edf8]">
+            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${normalized}%`, backgroundColor: accent }} />
+          </div>
+          <div className="mt-3 grid gap-2 text-xs font-bold text-[#667393] sm:grid-cols-3">
+            {ranges.map((range, index) => (
+              <div key={range} className={cx("border-l-2 pl-2", index === 0 && "sm:text-left", index === 1 && "sm:text-center", index === 2 && "sm:text-right")} style={{ borderColor: accent }}>
+                {range}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="mt-8 text-lg font-bold leading-8 text-[#3f5270]">{result.description}</p>
+        <div className="mt-6 grid gap-5 border-t border-[#cdddf0] pt-6 md:grid-cols-2">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#168e8a]">จุดเด่น</p>
+            <p className="mt-2 leading-7 text-[#586984]">{result.strengths}</p>
+          </div>
+          <div className="md:border-l md:border-[#cdddf0] md:pl-5">
+            <p className="text-xs font-black uppercase tracking-[0.16em] text-[#b84f73]">สิ่งที่ควรระวัง</p>
+            <p className="mt-2 leading-7 text-[#586984]">{result.watchOut}</p>
+          </div>
+        </div>
+
+        <p className="mt-7 border-t border-[#cdddf0] pt-4 text-xs leading-5 text-[#71809a]">
+          {isEngagement
+            ? "อ้างอิง: Engagement Survey, Dale Carnegie ตามเอกสารประกอบการสอน ผลนี้ใช้เพื่อการสะท้อนประสบการณ์ทำงาน"
+            : "อ้างอิง: แบบทดสอบสไตล์ผู้นำตามเอกสารประกอบการสอน ผลนี้สะท้อนแนวโน้มและไม่ใช่ข้อสรุปตายตัว"}
+        </p>
+      </article>
+    </section>
   );
 }
 
@@ -464,6 +1174,11 @@ function StartScreen({
   onStart: () => void;
 }) {
   const canStart = Boolean(playerName.trim() && gender);
+  const assessmentPreview = [
+    { short: "MAIN", title: "Future Self Quest", detail: `${questions.length} ข้อ` },
+    { short: "ENGAGE", title: "ความผูกพันต่อองค์กร", detail: `${engagementQuestions.length} ข้อ` },
+    { short: "LEAD", title: "สไตล์ผู้นำ", detail: `${leadershipStyleQuestions.length} ข้อ` }
+  ];
 
   return (
     <section className="mx-auto grid w-full max-w-7xl items-center gap-8 md:grid-cols-[minmax(0,1fr)_360px] lg:grid-cols-[minmax(0,1fr)_430px]">
@@ -476,7 +1191,7 @@ function StartScreen({
           ลงทะเบียนนักผจญภัย
         </h1>
         <p className="mt-5 max-w-2xl text-lg leading-8 text-[#51627f]">
-          ตั้งชื่อ เลือกเพศ แล้วตอบ 3 เควสต์เพื่อค้นหาอาชีพในตำนานที่เข้ากับตัวคุณ
+          ตั้งชื่อและเลือกเพศครั้งเดียว จากนั้นเลือกทำแบบประเมินแต่ละชุดแยกกันได้
         </p>
 
         <div className="mt-8 max-w-xl space-y-5 rounded-[8px] border border-white/70 bg-white/70 p-4 shadow-insetPanel backdrop-blur sm:p-5">
@@ -542,16 +1257,16 @@ function StartScreen({
         </div>
 
         <div className="mt-7 grid max-w-3xl gap-3 sm:grid-cols-3">
-          {chapters.map((chapter) => (
+          {assessmentPreview.map((assessment) => (
             <div
-              key={chapter.id}
+              key={assessment.short}
               className="rounded-[8px] border border-white/70 bg-white/62 p-4 shadow-sm backdrop-blur"
             >
               <p className="text-xs font-black uppercase tracking-[0.18em] text-[#61799b]">
-                {chapter.short}
+                {assessment.short}
               </p>
-              <p className="mt-2 text-base font-black text-[#24324b]">{chapter.titleTh}</p>
-              <p className="mt-1 text-sm text-[#657692]">{chapter.scale}</p>
+              <p className="mt-2 text-base font-black text-[#24324b]">{assessment.title}</p>
+              <p className="mt-1 text-sm text-[#657692]">{assessment.detail}</p>
             </div>
           ))}
         </div>
@@ -567,7 +1282,7 @@ function StartScreen({
           )}
         >
           <Play size={20} fill="currentColor" />
-          เริ่มเควสต์
+          ไปเลือกแบบประเมิน
         </button>
       </div>
 
@@ -587,7 +1302,7 @@ function StartScreen({
             <p className="mt-6 text-xs font-black text-[#61799b]">อาชีพของคุณ</p>
             <p className="mt-1 text-6xl font-black text-[#24324b]">???</p>
             <p className="mt-4 text-sm font-bold leading-6 text-[#586984]">
-              ทำแบบประเมินให้ครบเพื่อปลดล็อกอาชีพ
+              อาชีพจะปลดล็อกเมื่อทำ Main Quest ครบ
             </p>
           </div>
         </div>
@@ -604,8 +1319,8 @@ function StartScreen({
             </p>
           </div>
           <div className="rounded-[8px] border border-[#d5e3f4] bg-white/70 px-4 py-3 text-right">
-            <p className="text-xs font-bold text-[#6a7890]">Total Quest</p>
-            <p className="text-2xl font-black text-[#2d5f9c]">{questions.length}</p>
+            <p className="text-xs font-bold text-[#6a7890]">Assessments</p>
+            <p className="text-2xl font-black text-[#2d5f9c]">3</p>
           </div>
         </div>
       </div>
@@ -623,7 +1338,8 @@ function QuestScreen({
   onAnswer,
   onNext,
   onPrevious,
-  onRestart
+  onRestart,
+  onBackToHub
 }: {
   answers: AnswerMap;
   currentQuestion: Question;
@@ -635,6 +1351,7 @@ function QuestScreen({
   onNext: () => void;
   onPrevious: () => void;
   onRestart: () => void;
+  onBackToHub: () => void;
 }) {
   const chapter = chapters.find((item) => item.id === currentQuestion.chapterId) ?? chapters[0];
   const chapterQuestions = questions.filter((item) => item.chapterId === currentQuestion.chapterId);
@@ -721,13 +1438,23 @@ function QuestScreen({
           })}
         </div>
 
-        <button
-          onClick={onRestart}
-          className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 text-sm font-black text-[#38516f] transition hover:bg-white"
-        >
-          <RotateCcw size={16} />
-          เริ่มใหม่
-        </button>
+        <div className="mt-6 grid gap-2">
+          <button
+            type="button"
+            onClick={onBackToHub}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 text-sm font-black text-[#38516f] transition hover:bg-white"
+          >
+            <ClipboardList size={16} />
+            กระดานเควสต์
+          </button>
+          <button
+            onClick={onRestart}
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 text-sm font-black text-[#38516f] transition hover:bg-white"
+          >
+            <RotateCcw size={16} />
+            เริ่มใหม่ทั้งหมด
+          </button>
+        </div>
       </aside>
 
       <section className="animate-rise rounded-[8px]">
@@ -845,13 +1572,7 @@ function LikertPrompt({
   selected?: number;
   onAnswer: (value: number) => void;
 }) {
-  const options =
-    question.kind === "eq"
-      ? eqScale
-      : Array.from({ length: 10 }, (_, index) => ({
-          value: index + 1,
-          label: String(index + 1)
-        }));
+  const options = eqScale;
 
   return (
     <>
@@ -860,43 +1581,77 @@ function LikertPrompt({
       </h3>
       <p className="mt-3 max-w-4xl text-base leading-7 text-[#667393]">{question.prompt}</p>
 
-      <div
-        className={cx(
-          "answer-grid mt-8 grid gap-3",
-          question.kind === "competency" && "sm:grid-cols-10"
-        )}
-      >
-        {options.map((option) => (
-          <button
-            key={option.value}
-            onClick={() => onAnswer(option.value)}
-            className={cx(
-              "min-h-16 rounded-[8px] border px-3 py-3 text-center transition",
-              selected === option.value
-                ? "border-[#2f6fb6] bg-[#2f6fb6] text-white shadow-glow"
-                : "border-[#c5d6ea] bg-white/72 text-[#38516f] hover:-translate-y-0.5 hover:bg-white"
-            )}
-          >
-            <span className="block text-2xl font-black">{option.value}</span>
-            {question.kind === "eq" ? (
+      {question.kind === "competency" ? (
+        <CompetencyScale selected={selected} onAnswer={onAnswer} />
+      ) : (
+        <div className="answer-grid mt-8 grid gap-3">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              onClick={() => onAnswer(option.value)}
+              className={cx(
+                "min-h-16 rounded-[8px] border px-3 py-3 text-center transition",
+                selected === option.value
+                  ? "border-[#2f6fb6] bg-[#2f6fb6] text-white shadow-glow"
+                  : "border-[#c5d6ea] bg-white/72 text-[#38516f] hover:-translate-y-0.5 hover:bg-white"
+              )}
+            >
+              <span className="block text-2xl font-black">{option.value}</span>
               <span className="mt-1 block text-xs font-bold leading-5 opacity-85">
                 {option.label}
               </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-
-      {question.kind === "competency" ? (
-        <div className="mt-4 grid gap-2 text-sm font-bold text-[#667393] sm:grid-cols-4">
-          {Object.entries(competencyScaleAnchors).map(([value, label]) => (
-            <div key={value} className="rounded-[8px] border border-[#cdddf0] bg-white/55 px-3 py-2">
-              <span className="font-black text-[#2d5f9c]">{value}</span> {label}
-            </div>
+            </button>
           ))}
         </div>
-      ) : null}
+      )}
     </>
+  );
+}
+
+function CompetencyScale({
+  selected,
+  onAnswer
+}: {
+  selected?: number;
+  onAnswer: (value: number) => void;
+}) {
+  const anchorValues = [1, 5, 10] as const;
+
+  return (
+    <div className="mt-8">
+      <div className="overflow-hidden rounded-[8px] border border-[#b8cce4] bg-white/80 shadow-sm" role="radiogroup" aria-label="ระดับคะแนน 1 ถึง 10">
+        <div className="grid grid-cols-10">
+          {Array.from({ length: 10 }, (_, index) => index + 1).map((value, index) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={selected === value}
+              aria-label={`ให้คะแนน ${value} จาก 10: ${competencyScaleAnchors[value as keyof typeof competencyScaleAnchors]}`}
+              onClick={() => onAnswer(value)}
+              className={cx(
+                "relative flex h-16 min-w-0 items-center justify-center text-xl font-black transition sm:h-20 sm:text-2xl",
+                index > 0 && "border-l border-[#c5d6ea]",
+                selected === value
+                  ? "z-10 bg-[#2f6fb6] text-white shadow-[inset_0_-4px_0_rgba(15,55,103,0.3)]"
+                  : "bg-white/70 text-[#38516f] hover:bg-[#edf5ff]"
+              )}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-3 text-xs font-bold leading-5 text-[#667393] sm:text-sm">
+        {anchorValues.map((value) => (
+          <div key={value} className={cx(value === 5 && "text-center", value === 10 && "text-right")}>
+            <span className="mr-1 font-black text-[#2d5f9c]">{value}</span>
+            {competencyScaleAnchors[value]}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1007,7 +1762,7 @@ function scoreReferenceSummary(score: CategoryScore) {
   }
 
   if (reference.kind === "competency-benchmark") {
-    return `Mean ${reference.mean} · ช่วง 68% ${reference.low}-${reference.high} · ${reference.label}`;
+    return `Mean ${reference.mean} · ช่วงคนส่วนใหญ่ (68%) ${reference.low}-${reference.high} · ${reference.label}`;
   }
 
   return `Norm ${score.normScore} · ${reference.label}`;
@@ -1172,6 +1927,7 @@ function ResultScreen({
   answers,
   profile,
   onRestart,
+  onBackToHub,
   onBack
 }: {
   playerName: string;
@@ -1180,6 +1936,7 @@ function ResultScreen({
   answers: AnswerMap;
   profile: ProfileResult;
   onRestart: () => void;
+  onBackToHub: () => void;
   onBack: () => void;
 }) {
   const [exportingPart, setExportingPart] = useState<ChapterId | null>(null);
@@ -1218,13 +1975,22 @@ function ResultScreen({
       <PrintReport playerName={playerName} profile={profile} groupedScores={groupedScores} />
 
       <div className="no-print mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          onClick={onBack}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 px-4 text-sm font-black text-[#38516f] transition hover:bg-white"
-        >
-          <ChevronLeft size={18} />
-          กลับไปดูคำตอบ
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            onClick={onBackToHub}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 px-4 text-sm font-black text-[#38516f] transition hover:bg-white"
+          >
+            <ClipboardList size={17} />
+            กระดานเควสต์
+          </button>
+          <button
+            onClick={onBack}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/70 px-4 text-sm font-black text-[#38516f] transition hover:bg-white"
+          >
+            <ChevronLeft size={18} />
+            กลับไปดูคำตอบ
+          </button>
+        </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <button
             onClick={() => window.print()}
@@ -1369,6 +2135,8 @@ function ResultScreen({
                 <CategoryBar key={score.key} score={score} />
               ))}
             </div>
+            {chapter.id === "bigFive" ? <BigFiveLocatorChart scores={scores} /> : null}
+            {chapter.id === "competency" ? <CompetencyBenchmarkChart scores={scores} /> : null}
           </div>
         ))}
       </section>
@@ -1524,6 +2292,179 @@ function StatBar({ stat }: { stat: RpgStat }) {
   );
 }
 
+const bigFiveLocatorLabels: Record<string, [string, string, string]> = {
+  adjustment: ["Resilient", "Responsive", "Reactive"],
+  sociability: ["Introvert", "Ambivert", "Extrovert"],
+  openness: ["Preserver", "Moderate", "Explorer"],
+  agreeableness: ["Challenger", "Negotiator", "Adapter"],
+  conscientiousness: ["Flexible", "Balanced", "Focused"]
+};
+
+function BigFiveLocatorChart({ scores }: { scores: CategoryScore[] }) {
+  const locatorMin = 20;
+  const locatorMax = 80;
+  const ticks = [35, 45, 55, 65];
+  const positionFor = (value: number) =>
+    Math.max(2, Math.min(98, ((value - locatorMin) / (locatorMax - locatorMin)) * 100));
+
+  return (
+    <section className="mt-5 border-t border-[#cdddf0] pt-5" aria-labelledby="big-five-locator-title">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#61799b]">BIG FIVE LOCATOR</p>
+          <h4 id="big-five-locator-title" className="mt-1 text-xl font-black text-[#24324b]">
+            ตำแหน่ง Norm Score บนแนวตีความ
+          </h4>
+        </div>
+        <p className="text-xs font-bold text-[#667393]">จุดสีน้ำเงินคือ Norm Score ของผู้ทำ</p>
+      </div>
+
+      <div className="mt-4 grid gap-4">
+        {scores.map((score) => {
+          const normScore = score.normScore ?? 50;
+          const labels = bigFiveLocatorLabels[score.key] ?? ["Low", "Moderate", "High"];
+          const markerLeft = positionFor(normScore);
+
+          return (
+            <article key={score.key} className="grid gap-2 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-5">
+              <div className="flex items-baseline justify-between gap-3 sm:block">
+                <div>
+                  <p className="font-black text-[#24324b]">{score.labelTh}</p>
+                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-[#667393]">{score.label}</p>
+                </div>
+                <span className="shrink-0 rounded-[6px] bg-[#eaf3ff] px-2 py-1 text-sm font-black text-[#2f6fb6]">
+                  Norm {normScore}
+                </span>
+              </div>
+
+              <div className="relative pt-7">
+                <div className="absolute inset-x-0 top-0 h-5 text-[10px] font-black text-[#61799b] sm:text-xs">
+                  {labels.map((label, index) => (
+                    <span
+                      key={label}
+                      className="absolute -translate-x-1/2 whitespace-nowrap"
+                      style={{ left: `${[33.33, 50, 66.67][index]}%` }}
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+                <div className="relative h-5 rounded-full bg-[#e4edf8]">
+                  <div className="absolute left-[25%] top-0 h-full w-[16.67%] rounded-l-full bg-[#dbeaff]" />
+                  <div className="absolute left-[41.67%] top-0 h-full w-[16.66%] bg-[#d8f0ee]" />
+                  <div className="absolute left-[58.33%] top-0 h-full w-[16.67%] rounded-r-full bg-[#fff0cb]" />
+                  {ticks.map((tick) => (
+                    <span
+                      key={tick}
+                      className="absolute top-0 h-full w-px bg-[#8ca4c2]/70"
+                      style={{ left: `${positionFor(tick)}%` }}
+                    />
+                  ))}
+                  <span
+                    className="absolute top-1/2 h-8 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#2f6fb6] shadow-[0_0_0_4px_rgba(47,111,182,0.16)]"
+                    style={{ left: `${markerLeft}%` }}
+                  />
+                </div>
+                <div className="relative mt-1 h-4 text-[10px] font-bold text-[#71809a] sm:text-xs">
+                  {ticks.map((tick) => (
+                    <span key={tick} className="absolute -translate-x-1/2" style={{ left: `${positionFor(tick)}%` }}>
+                      {tick}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CompetencyBenchmarkChart({ scores }: { scores: CategoryScore[] }) {
+  const benchmarkScores = scores.filter((score) => score.reference?.kind === "competency-benchmark");
+  const chart = { width: 820, height: 455, left: 54, top: 30, plotWidth: 720, plotHeight: 308 };
+  const bottom = chart.top + chart.plotHeight;
+  const yFor = (value: number) => chart.top + ((100 - Math.max(0, Math.min(100, value))) / 100) * chart.plotHeight;
+  const xFor = (index: number) =>
+    chart.left + (chart.plotWidth / Math.max(benchmarkScores.length - 1, 1)) * index;
+
+  return (
+    <section className="mt-5 border-t border-[#cdddf0] pt-5" aria-labelledby="competency-chart-title">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#61799b]">PROFESSIONAL COMPETENCIES</p>
+          <h4 id="competency-chart-title" className="mt-1 text-xl font-black text-[#24324b]">
+            เปรียบเทียบคะแนนกับกลุ่มอ้างอิง
+          </h4>
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-[#667393]" aria-label="คำอธิบายกราฟ">
+          <span className="inline-flex items-center gap-1.5"><i className="h-3 w-3 rounded-full bg-[#24324b]" />Mean</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-3 w-5 bg-[#f5df5d]" />ช่วงคนส่วนใหญ่ (68%)</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-3 w-5 rounded-[2px] border-2 border-[#d6555b] bg-white" />คะแนนของคุณ</span>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-[8px] border border-[#d5e3f4] bg-white/70 p-3">
+        <svg
+          viewBox={`0 0 ${chart.width} ${chart.height}`}
+          className="w-full min-w-[760px]"
+          role="img"
+          aria-label="กราฟเปรียบเทียบคะแนน Professional Competencies กับค่าเฉลี่ยและช่วงอ้างอิง 68 เปอร์เซ็นต์"
+        >
+          {Array.from({ length: 11 }, (_, index) => index * 10).map((tick) => {
+            const y = yFor(tick);
+            return (
+              <g key={tick}>
+                <line x1={chart.left} x2={chart.left + chart.plotWidth} y1={y} y2={y} stroke="#9bb1ca" strokeDasharray="4 5" strokeWidth="1" />
+                <text x={chart.left - 10} y={y + 4} textAnchor="end" fontSize="11" fontWeight="700" fill="#667393">
+                  {tick}
+                </text>
+              </g>
+            );
+          })}
+          <line x1={chart.left} x2={chart.left} y1={chart.top} y2={bottom} stroke="#38516f" strokeWidth="1.5" />
+          <line x1={chart.left} x2={chart.left + chart.plotWidth} y1={bottom} y2={bottom} stroke="#38516f" strokeWidth="1.5" />
+
+          {benchmarkScores.map((score, index) => {
+            const reference = score.reference;
+            if (!reference || reference.kind !== "competency-benchmark") return null;
+            const x = xFor(index);
+            const top = yFor(reference.high ?? 100);
+            const rangeBottom = yFor(reference.low ?? 0);
+            const meanY = yFor(reference.mean ?? 0);
+            const scoreY = yFor(score.raw);
+            const labelY = Math.max(chart.top + 2, scoreY - 23);
+            const labelWords = score.label.replace("Managing ", "").split(" ");
+
+            return (
+              <g key={score.key}>
+                <line x1={x} x2={x} y1={chart.top} y2={bottom} stroke="#d5e3f4" strokeWidth="1" />
+                <rect x={x - 9} y={top} width="18" height={rangeBottom - top} fill="#f5df5d" fillOpacity="0.9" />
+                <circle cx={x} cy={meanY} r="4" fill="#24324b" />
+                <line x1={x} x2={x} y1={scoreY} y2={labelY + 17} stroke="#d6555b" strokeWidth="1.5" />
+                <rect x={x - 17} y={labelY} width="34" height="17" rx="2" fill="white" stroke="#d6555b" strokeWidth="1.5" />
+                <text x={x} y={labelY + 12} textAnchor="middle" fontSize="10" fontWeight="800" fill="#b64148">
+                  {score.raw}
+                </text>
+                <text x={x} y={bottom + 23} textAnchor="middle" fontSize="10" fontWeight="700" fill="#3f5270">
+                  {labelWords.slice(0, 2).map((word, wordIndex) => (
+                    <tspan key={word} x={x} dy={wordIndex === 0 ? 0 : 12}>{word}</tspan>
+                  ))}
+                </text>
+              </g>
+            );
+          })}
+          <text x={chart.left} y={16} fontSize="12" fontWeight="800" fill="#3f5270">คะแนน</text>
+        </svg>
+      </div>
+      <p className="mt-3 text-xs leading-5 text-[#667393]">
+        ช่วงสีเหลืองแสดงคะแนนของคนส่วนใหญ่ในกลุ่มอ้างอิงประมาณ 68% จุดดำคือ Mean และกรอบแดงคือคะแนนของคุณ
+      </p>
+    </section>
+  );
+}
+
 function CategoryBar({ score }: { score: CategoryScore }) {
   const metrics = [{ label: "คะแนนดิบ", value: `${score.raw}/${score.max}` }];
   const reference = score.reference;
@@ -1535,7 +2476,7 @@ function CategoryBar({ score }: { score: CategoryScore }) {
   } else if (reference?.kind === "competency-benchmark") {
     metrics.push(
       { label: "Mean", value: String(reference.mean) },
-      { label: "ช่วง 68%", value: `${reference.low}-${reference.high}` }
+      { label: "ช่วงคนส่วนใหญ่ 68%", value: `${reference.low}-${reference.high}` }
     );
   }
 

@@ -146,10 +146,10 @@ function responseHeaders(chapterId: ChapterId) {
     "คะแนนเต็มหมวด",
     "Norm Score",
     "คะแนนแสดงผล (0-100)",
-    "Reference Mean",
-    "Reference Low",
-    "Reference High",
-    "ผลเทียบอ้างอิง"
+    "Mean กลุ่มอ้างอิง",
+    "ขอบล่างช่วงคนส่วนใหญ่ (68%)",
+    "ขอบบนช่วงคนส่วนใหญ่ (68%)",
+    "กลุ่มผลคะแนน"
   );
 
   return headers;
@@ -251,10 +251,10 @@ function addSummarySheet(
     "คะแนนเต็ม",
     "Norm Score",
     "คะแนนแสดงผล (0-100)",
-    "Reference Mean",
-    "Reference Low",
-    "Reference High",
-    "ผลเทียบอ้างอิง",
+    "Mean กลุ่มอ้างอิง",
+    "ขอบล่างช่วงคนส่วนใหญ่ (68%)",
+    "ขอบบนช่วงคนส่วนใหญ่ (68%)",
+    "กลุ่มผลคะแนน",
     "คำอธิบาย"
   ];
   const worksheet = workbook.addWorksheet("สรุปคะแนน", {

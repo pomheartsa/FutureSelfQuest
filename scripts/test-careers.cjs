@@ -88,5 +88,25 @@ assertEqual(managingSelf.raw, 80, "Pro Managing Self raw score");
 assertEqual(managingSelf.reference.mean, 78, "Pro Managing Self mean");
 assertEqual(managingSelf.reference.low, 69, "Pro Managing Self reference low");
 assertEqual(managingSelf.reference.high, 87, "Pro Managing Self reference high");
+assertEqual(managingSelf.levelLabel, "อยู่ในกลุ่มคนส่วนใหญ่", "Pro majority label");
+
+function competencyScoreAt(value) {
+  const answers = {};
+  for (const question of questions) {
+    answers[question.id] = question.kind === "eq" ? 2 : question.kind === "bigFive" ? 3 : value;
+  }
+  return calculateProfile(answers).categoryScores.find((score) => score.key === "managingSelf");
+}
+
+assertEqual(
+  competencyScoreAt(6).levelLabel,
+  "อยู่ในกลุ่มคนส่วนน้อย (คะแนนต่ำกว่าช่วงของคนส่วนใหญ่)",
+  "Pro lower minority label"
+);
+assertEqual(
+  competencyScoreAt(10).levelLabel,
+  "อยู่ในกลุ่มคนส่วนน้อย (คะแนนสูงกว่าช่วงของคนส่วนใหญ่)",
+  "Pro upper minority label"
+);
 
 console.log("Reference scoring: passed");
