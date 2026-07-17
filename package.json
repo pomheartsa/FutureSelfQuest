@@ -1,13 +1,15 @@
 {
   "name": "future-self-quest",
-  "version": "1.4.0",
+  "version": "1.6.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "typecheck": "tsc --noEmit",
     "test:careers": "node scripts/test-careers.cjs",
-    "test:side": "node scripts/test-side-assessments.cjs"
+    "test:side": "node scripts/test-side-assessments.cjs",
+    "test:belbin": "node scripts/test-belbin.cjs",
+    "test:leadership-potential": "node scripts/test-leadership-potential.cjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

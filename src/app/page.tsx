@@ -3,21 +3,26 @@
 import {
   BarChart3,
   BookOpenCheck,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Crown,
   Download,
   HeartHandshake,
   LockKeyhole,
   Medal,
+  Minus,
   Play,
+  Plus,
   Printer,
   RotateCcw,
   ShieldCheck,
   Sparkles,
   UserRound,
   UsersRound,
+  Workflow,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -48,13 +53,36 @@ import {
   type SideAssessmentResult,
   type SideQuestId
 } from "@/lib/side-assessments";
+import {
+  belbinSections,
+  calculateBelbinResult,
+  countCompletedBelbinSections,
+  isBelbinSectionComplete,
+  sanitizeBelbinAnswers,
+  type BelbinAnswers,
+  type BelbinResult,
+  type BelbinSectionId,
+  type BelbinSectionScores
+} from "@/lib/belbin-assessment";
+import {
+  calculateLeadershipPotentialResult,
+  leadershipPotentialCodes,
+  leadershipPotentialProfiles,
+  leadershipPotentialQuestions,
+  sanitizeLeadershipPotentialAnswers,
+  type LeadershipPotentialAnswers,
+  type LeadershipPotentialCode,
+  type LeadershipPotentialResult
+} from "@/lib/leadership-potential";
 
 const SESSION_STORAGE_KEY = "future-self-quest-session-v2";
 const LEGACY_STORAGE_KEY = "future-self-quest-state-v1";
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.6.0";
 const UPDATE_STORAGE_KEY = `future-self-quest-update-${APP_VERSION}`;
 
 const releaseNotes = [
+  "เพิ่มแบบทดสอบภาวะผู้นำ 10 ข้อ พร้อมผลลัพธ์ 4 สีและผลแบบผสมเมื่อคะแนนเสมอ",
+  "เพิ่ม Belbin Team Roles 7 ส่วน พร้อมระบบแบ่ง 10 คะแนนและผลบทบาทเด่นของทีม",
   "เพิ่มกระดานเลือกแบบประเมิน แยก Main Quest ออกจากแบบทดสอบเสริม",
   "เพิ่ม Engagement Survey 22 ข้อ และแบบทดสอบสไตล์ผู้นำ 8 ข้อพร้อมผลลัพธ์",
   "ปรับคำอธิบายผล Pro ให้แสดงว่าอยู่ในกลุ่มคนส่วนใหญ่หรือกลุ่มคนส่วนน้อย",
@@ -77,7 +105,13 @@ function cx(...classes: Array<string | false | null | undefined>) {
 type BodyType = "female" | "male";
 type Gender = "female" | "male";
 type JobId = "acolyte" | "archer" | "mage" | "merchant" | "sword";
-type AppView = "registration" | "hub" | "core" | SideQuestId;
+type AppView =
+  | "registration"
+  | "hub"
+  | "core"
+  | "belbin"
+  | "leadershipPotential"
+  | SideQuestId;
 
 type AvatarConfig = {
   jobId: JobId;
@@ -96,36 +130,36 @@ const jobOptions: Array<{
   {
     id: "sword",
     variants: {
-      female: "/jobs/swordwoman.png",
-      male: "/jobs/swordman.png"
+      female: "/jobs/swordwoman.webp",
+      male: "/jobs/swordman.webp"
     }
   },
   {
     id: "mage",
     variants: {
-      female: "/jobs/magewoman.png",
-      male: "/jobs/mageman.png"
+      female: "/jobs/magewoman.webp",
+      male: "/jobs/mageman.webp"
     }
   },
   {
     id: "archer",
     variants: {
-      female: "/jobs/archerwoman.png",
-      male: "/jobs/archerman.png"
+      female: "/jobs/archerwoman.webp",
+      male: "/jobs/archerman.webp"
     }
   },
   {
     id: "acolyte",
     variants: {
-      female: "/jobs/acolytewoman.png",
-      male: "/jobs/acolyteman.png"
+      female: "/jobs/acolytewoman.webp",
+      male: "/jobs/acolyteman.webp"
     }
   },
   {
     id: "merchant",
     variants: {
-      female: "/jobs/merchantwoman.png",
-      male: "/jobs/merchantman.png"
+      female: "/jobs/merchantwoman.webp",
+      male: "/jobs/merchantman.webp"
     }
   }
 ];
@@ -167,7 +201,9 @@ function normalizeAppView(value: unknown, legacyStarted?: boolean): AppView {
     value === "hub" ||
     value === "core" ||
     value === "engagement" ||
-    value === "leadershipStyle"
+    value === "leadershipStyle" ||
+    value === "belbin" ||
+    value === "leadershipPotential"
   ) {
     return value;
   }
@@ -368,6 +404,14 @@ export default function Home() {
     engagement: false,
     leadershipStyle: false
   });
+  const [belbinAnswers, setBelbinAnswers] = useState<BelbinAnswers>({});
+  const [belbinCurrentIndex, setBelbinCurrentIndex] = useState(0);
+  const [belbinShowResult, setBelbinShowResult] = useState(false);
+  const [leadershipPotentialAnswers, setLeadershipPotentialAnswers] =
+    useState<LeadershipPotentialAnswers>({});
+  const [leadershipPotentialIndex, setLeadershipPotentialIndex] = useState(0);
+  const [leadershipPotentialShowResult, setLeadershipPotentialShowResult] =
+    useState(false);
   const [showUpdate, setShowUpdate] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>(defaultAvatarConfig);
@@ -395,6 +439,12 @@ export default function Home() {
           sideAnswers?: Partial<Record<SideQuestId, SideAnswerMap>>;
           sideCurrentIndex?: Partial<Record<SideQuestId, number>>;
           sideShowResult?: Partial<Record<SideQuestId, boolean>>;
+          belbinAnswers?: BelbinAnswers;
+          belbinCurrentIndex?: number;
+          belbinShowResult?: boolean;
+          leadershipPotentialAnswers?: LeadershipPotentialAnswers;
+          leadershipPotentialIndex?: number;
+          leadershipPotentialShowResult?: boolean;
         };
         setPlayerName(
           typeof saved.playerName === "string" ? saved.playerName.slice(0, 28) : ""
@@ -432,6 +482,23 @@ export default function Home() {
           engagement: Boolean(saved.sideShowResult?.engagement),
           leadershipStyle: Boolean(saved.sideShowResult?.leadershipStyle)
         });
+        setBelbinAnswers(sanitizeBelbinAnswers(saved.belbinAnswers));
+        setBelbinCurrentIndex(
+          clampStoredIndex(saved.belbinCurrentIndex, belbinSections.length)
+        );
+        setBelbinShowResult(Boolean(saved.belbinShowResult));
+        setLeadershipPotentialAnswers(
+          sanitizeLeadershipPotentialAnswers(saved.leadershipPotentialAnswers)
+        );
+        setLeadershipPotentialIndex(
+          clampStoredIndex(
+            saved.leadershipPotentialIndex,
+            leadershipPotentialQuestions.length
+          )
+        );
+        setLeadershipPotentialShowResult(
+          Boolean(saved.leadershipPotentialShowResult)
+        );
       } catch {
         window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
       }
@@ -454,17 +521,29 @@ export default function Home() {
         avatarConfig,
         sideAnswers,
         sideCurrentIndex,
-        sideShowResult
+        sideShowResult,
+        belbinAnswers,
+        belbinCurrentIndex,
+        belbinShowResult,
+        leadershipPotentialAnswers,
+        leadershipPotentialIndex,
+        leadershipPotentialShowResult
       })
     );
   }, [
     answers,
     appView,
     avatarConfig,
+    belbinAnswers,
+    belbinCurrentIndex,
+    belbinShowResult,
     currentIndex,
     gender,
     hydrated,
     playerName,
+    leadershipPotentialAnswers,
+    leadershipPotentialIndex,
+    leadershipPotentialShowResult,
     showResult,
     sideAnswers,
     sideCurrentIndex,
@@ -496,6 +575,12 @@ export default function Home() {
     setSideAnswers({ engagement: {}, leadershipStyle: {} });
     setSideCurrentIndex({ engagement: 0, leadershipStyle: 0 });
     setSideShowResult({ engagement: false, leadershipStyle: false });
+    setBelbinAnswers({});
+    setBelbinCurrentIndex(0);
+    setBelbinShowResult(false);
+    setLeadershipPotentialAnswers({});
+    setLeadershipPotentialIndex(0);
+    setLeadershipPotentialShowResult(false);
     window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
   }
 
@@ -593,6 +678,96 @@ export default function Home() {
     setSideShowResult((current) => ({ ...current, [questId]: false }));
   }
 
+  function updateBelbinSection(
+    sectionId: BelbinSectionId,
+    scores: BelbinSectionScores
+  ) {
+    setBelbinAnswers((current) => ({ ...current, [sectionId]: scores }));
+  }
+
+  function goBelbinPrevious() {
+    navigationGeneration.current += 1;
+    setBelbinShowResult(false);
+    setBelbinCurrentIndex((index) => Math.max(0, index - 1));
+  }
+
+  function goBelbinNext() {
+    navigationGeneration.current += 1;
+    const section = belbinSections[belbinCurrentIndex];
+    if (!isBelbinSectionComplete(belbinAnswers[section.id])) return;
+
+    if (belbinCurrentIndex === belbinSections.length - 1) {
+      if (countCompletedBelbinSections(belbinAnswers) === belbinSections.length) {
+        setBelbinShowResult(true);
+      }
+      return;
+    }
+
+    setBelbinCurrentIndex((index) => Math.min(belbinSections.length - 1, index + 1));
+  }
+
+  function restartBelbin() {
+    navigationGeneration.current += 1;
+    setBelbinAnswers({});
+    setBelbinCurrentIndex(0);
+    setBelbinShowResult(false);
+  }
+
+  function answerLeadershipPotential(
+    questionId: number,
+    code: LeadershipPotentialCode
+  ) {
+    const answeredIndex = leadershipPotentialIndex;
+    const nextAnswers = {
+      ...leadershipPotentialAnswers,
+      [questionId]: code
+    };
+    const generation = ++navigationGeneration.current;
+    setLeadershipPotentialAnswers(nextAnswers);
+
+    window.setTimeout(() => {
+      if (navigationGeneration.current !== generation) return;
+      if (answeredIndex === leadershipPotentialQuestions.length - 1) {
+        if (Object.keys(nextAnswers).length === leadershipPotentialQuestions.length) {
+          setLeadershipPotentialShowResult(true);
+        }
+        return;
+      }
+      setLeadershipPotentialIndex((index) =>
+        index === answeredIndex ? index + 1 : index
+      );
+    }, 170);
+  }
+
+  function goLeadershipPotentialPrevious() {
+    navigationGeneration.current += 1;
+    setLeadershipPotentialShowResult(false);
+    setLeadershipPotentialIndex((index) => Math.max(0, index - 1));
+  }
+
+  function goLeadershipPotentialNext() {
+    navigationGeneration.current += 1;
+    if (leadershipPotentialIndex === leadershipPotentialQuestions.length - 1) {
+      if (
+        Object.keys(leadershipPotentialAnswers).length ===
+        leadershipPotentialQuestions.length
+      ) {
+        setLeadershipPotentialShowResult(true);
+      }
+      return;
+    }
+    setLeadershipPotentialIndex((index) =>
+      Math.min(leadershipPotentialQuestions.length - 1, index + 1)
+    );
+  }
+
+  function restartLeadershipPotential() {
+    navigationGeneration.current += 1;
+    setLeadershipPotentialAnswers({});
+    setLeadershipPotentialIndex(0);
+    setLeadershipPotentialShowResult(false);
+  }
+
   function backToQuestHub() {
     navigationGeneration.current += 1;
     setAppView("hub");
@@ -645,9 +820,26 @@ export default function Home() {
             coreAnswered={profile.answeredCount}
             engagementAnswered={Object.keys(sideAnswers.engagement).length}
             leadershipAnswered={Object.keys(sideAnswers.leadershipStyle).length}
+            belbinCompleted={countCompletedBelbinSections(belbinAnswers)}
+            leadershipPotentialAnswered={
+              Object.keys(leadershipPotentialAnswers).length
+            }
             onSelect={(questId) => {
               if (questId === "core") {
                 startCoreQuest();
+              } else if (questId === "belbin") {
+                if (countCompletedBelbinSections(belbinAnswers) === belbinSections.length) {
+                  setBelbinShowResult(true);
+                }
+                setAppView("belbin");
+              } else if (questId === "leadershipPotential") {
+                if (
+                  Object.keys(leadershipPotentialAnswers).length ===
+                  leadershipPotentialQuestions.length
+                ) {
+                  setLeadershipPotentialShowResult(true);
+                }
+                setAppView("leadershipPotential");
               } else {
                 if (Object.keys(sideAnswers[questId]).length === sideQuestionCount(questId)) {
                   setSideShowResult((current) => ({ ...current, [questId]: true }));
@@ -657,6 +849,84 @@ export default function Home() {
             }}
             onReset={restart}
           />
+        </main>
+        {appOverlays}
+      </>
+    );
+  }
+
+  if (appView === "leadershipPotential") {
+    const result = calculateLeadershipPotentialResult(
+      leadershipPotentialAnswers
+    );
+
+    return (
+      <>
+        <main className="quest-shell min-h-svh px-4 py-5 sm:px-6 lg:px-10">
+          {leadershipPotentialShowResult && result ? (
+            <LeadershipPotentialResultScreen
+              playerName={playerName}
+              result={result}
+              onBackToAnswers={() => {
+                navigationGeneration.current += 1;
+                setLeadershipPotentialShowResult(false);
+                setLeadershipPotentialIndex(
+                  leadershipPotentialQuestions.length - 1
+                );
+              }}
+              onBackToHub={backToQuestHub}
+              onRestart={restartLeadershipPotential}
+            />
+          ) : (
+            <LeadershipPotentialScreen
+              playerName={playerName}
+              gender={gender}
+              answers={leadershipPotentialAnswers}
+              currentIndex={leadershipPotentialIndex}
+              onAnswer={answerLeadershipPotential}
+              onPrevious={goLeadershipPotentialPrevious}
+              onNext={goLeadershipPotentialNext}
+              onBackToHub={backToQuestHub}
+              onRestart={restartLeadershipPotential}
+            />
+          )}
+        </main>
+        {appOverlays}
+      </>
+    );
+  }
+
+  if (appView === "belbin") {
+    const result = calculateBelbinResult(belbinAnswers);
+
+    return (
+      <>
+        <main className="quest-shell min-h-svh px-4 py-5 sm:px-6 lg:px-10">
+          {belbinShowResult && result ? (
+            <BelbinResultScreen
+              playerName={playerName}
+              result={result}
+              onBackToAnswers={() => {
+                navigationGeneration.current += 1;
+                setBelbinShowResult(false);
+                setBelbinCurrentIndex(belbinSections.length - 1);
+              }}
+              onBackToHub={backToQuestHub}
+              onRestart={restartBelbin}
+            />
+          ) : (
+            <BelbinAssessmentScreen
+              playerName={playerName}
+              gender={gender}
+              answers={belbinAnswers}
+              currentIndex={belbinCurrentIndex}
+              onChange={updateBelbinSection}
+              onPrevious={goBelbinPrevious}
+              onNext={goBelbinNext}
+              onBackToHub={backToQuestHub}
+              onRestart={restartBelbin}
+            />
+          )}
         </main>
         {appOverlays}
       </>
@@ -700,6 +970,7 @@ export default function Home() {
               onPrevious={() => goSidePrevious(questId)}
               onNext={() => goSideNext(questId)}
               onBackToHub={backToQuestHub}
+              onRestart={() => restartSideQuest(questId)}
             />
           )}
         </main>
@@ -760,6 +1031,8 @@ function QuestHubScreen({
   coreAnswered,
   engagementAnswered,
   leadershipAnswered,
+  leadershipPotentialAnswered,
+  belbinCompleted,
   onSelect,
   onReset
 }: {
@@ -768,9 +1041,21 @@ function QuestHubScreen({
   coreAnswered: number;
   engagementAnswered: number;
   leadershipAnswered: number;
-  onSelect: (questId: "core" | SideQuestId) => void;
+  leadershipPotentialAnswered: number;
+  belbinCompleted: number;
+  onSelect: (
+    questId: "core" | "belbin" | "leadershipPotential" | SideQuestId
+  ) => void;
   onReset: () => void;
 }) {
+  const [confirmingReset, setConfirmingReset] = useState(false);
+
+  useEffect(() => {
+    if (!confirmingReset) return;
+    const timer = window.setTimeout(() => setConfirmingReset(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirmingReset]);
+
   const quests = [
     {
       id: "core" as const,
@@ -779,6 +1064,7 @@ function QuestHubScreen({
       description: "EQ, Big Five และ Professional Competencies เพื่อค้นหาอาชีพที่เข้ากับคุณ",
       answered: coreAnswered,
       total: questions.length,
+      unit: "ข้อ",
       duration: "ประมาณ 20-25 นาที",
       accent: "#2f6fb6",
       icon: <ShieldCheck size={25} />
@@ -790,6 +1076,7 @@ function QuestHubScreen({
       description: "สำรวจความเชื่อมั่น ความภาคภูมิใจ และพลังที่คุณมีต่อองค์กร",
       answered: engagementAnswered,
       total: engagementQuestions.length,
+      unit: "ข้อ",
       duration: "ประมาณ 5-7 นาที",
       accent: "#39a7a5",
       icon: <HeartHandshake size={25} />
@@ -801,14 +1088,39 @@ function QuestHubScreen({
       description: "ค้นหารูปแบบการบริหารทีมที่คุณใช้บ่อย พร้อมจุดเด่นและสิ่งที่ควรระวัง",
       answered: leadershipAnswered,
       total: leadershipStyleQuestions.length,
+      unit: "ข้อ",
       duration: "ประมาณ 3-4 นาที",
       accent: "#b84f73",
       icon: <UsersRound size={25} />
+    },
+    {
+      id: "leadershipPotential" as const,
+      eyebrow: "COLOR QUEST",
+      title: "ภาวะผู้นำ 4 สี",
+      description: "ตอบ 10 สถานการณ์ เพื่อค้นหาแนวโน้มภาวะผู้นำจากตัวเลือก A, B, C หรือ D ที่เด่นที่สุด",
+      answered: leadershipPotentialAnswered,
+      total: leadershipPotentialQuestions.length,
+      unit: "ข้อ",
+      duration: "ประมาณ 4-6 นาที",
+      accent: "#795b85",
+      icon: <Crown size={25} />
+    },
+    {
+      id: "belbin" as const,
+      eyebrow: "TEAM QUEST",
+      title: "บทบาทในทีม Belbin",
+      description: "แบ่ง 10 คะแนนในแต่ละสถานการณ์ เพื่อค้นหาบทบาทเด่นที่คุณนำมาใช้ในทีม",
+      answered: belbinCompleted,
+      total: belbinSections.length,
+      unit: "ส่วน",
+      duration: "ประมาณ 10-15 นาที",
+      accent: "#b77a26",
+      icon: <Workflow size={25} />
     }
   ];
 
   return (
-    <section className="mx-auto max-w-6xl animate-rise">
+    <section className="mx-auto max-w-7xl animate-rise">
       <header className="flex flex-col gap-5 border-b border-[#cdddf0] pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="inline-flex items-center gap-2 text-sm font-black uppercase tracking-[0.18em] text-[#61799b]">
@@ -822,7 +1134,7 @@ function QuestHubScreen({
             แต่ละแบบแยกจากกัน ทำชุดไหนก่อนก็ได้ และกลับมาทำชุดอื่นต่อได้ตลอดในแท็บนี้
           </p>
         </div>
-        <div className="flex items-center justify-between gap-4 rounded-[8px] border border-white/75 bg-white/65 px-4 py-3 sm:min-w-64">
+        <div className="flex flex-col gap-3 rounded-[8px] border border-white/75 bg-white/65 px-4 py-3 sm:min-w-64">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">Adventurer</p>
             <p className="text-xl font-black text-[#24324b]">{playerName}</p>
@@ -830,16 +1142,30 @@ function QuestHubScreen({
           </div>
           <button
             type="button"
-            onClick={onReset}
-            title="ล้างข้อมูลทั้งหมดและกลับหน้าลงทะเบียน"
-            className="grid h-10 w-10 place-items-center rounded-[8px] border border-[#c5d6ea] bg-white/75 text-[#38516f] transition hover:bg-white"
+            onClick={() => {
+              if (!confirmingReset) {
+                setConfirmingReset(true);
+                return;
+              }
+              setConfirmingReset(false);
+              onReset();
+            }}
+            className={cx(
+              "inline-flex h-10 w-full items-center justify-center gap-2 rounded-[8px] border px-3 text-xs font-black transition",
+              confirmingReset
+                ? "border-[#d19090] bg-[#fdeeee] text-[#b04a4a] hover:bg-[#fce3e3]"
+                : "border-[#c5d6ea] bg-white/75 text-[#38516f] hover:bg-white"
+            )}
           >
-            <RotateCcw size={17} />
+            <RotateCcw size={15} />
+            {confirmingReset
+              ? "แตะอีกครั้ง เพื่อล้างข้อมูลและกลับหน้าลงทะเบียน"
+              : "ล้างข้อมูลทั้งหมด เริ่มผู้เล่นใหม่"}
           </button>
         </div>
       </header>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+      <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {quests.map((quest, index) => {
           const progress = Math.round((quest.answered / quest.total) * 100);
           const completed = quest.answered === quest.total;
@@ -848,7 +1174,7 @@ function QuestHubScreen({
               key={quest.id}
               className={cx(
                 "panel group flex min-h-[340px] flex-col rounded-[8px] p-5 transition duration-300 hover:-translate-y-1 hover:bg-white/95",
-                index === 0 && "lg:min-h-[380px]"
+                index === 0 && "xl:min-h-[380px]"
               )}
               style={{ borderTop: `5px solid ${quest.accent}` }}
             >
@@ -860,7 +1186,7 @@ function QuestHubScreen({
                   {quest.icon}
                 </span>
                 <span className="rounded-[6px] border border-[#cdddf0] bg-white/70 px-2.5 py-1 text-xs font-black text-[#61799b]">
-                  {quest.total} ข้อ
+                  {quest.total} {quest.unit}
                 </span>
               </div>
 
@@ -900,6 +1226,48 @@ function QuestHubScreen({
   );
 }
 
+function RestartQuestButton({
+  onRestart,
+  disabled = false
+}: {
+  onRestart: () => void;
+  disabled?: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const timer = window.setTimeout(() => setConfirming(false), 4000);
+    return () => window.clearTimeout(timer);
+  }, [confirming]);
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => {
+        if (!confirming) {
+          setConfirming(true);
+          return;
+        }
+        setConfirming(false);
+        onRestart();
+      }}
+      className={cx(
+        "mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded-[8px] border px-3 text-sm font-black transition",
+        disabled
+          ? "cursor-not-allowed border-[#d7e3f1] bg-white/35 text-[#98a6bb]"
+          : confirming
+            ? "border-[#d19090] bg-[#fdeeee] text-[#b04a4a] hover:bg-[#fce3e3]"
+            : "border-[#b8cce4] bg-white/70 text-[#38516f] hover:bg-white"
+      )}
+    >
+      <RotateCcw size={16} />
+      {!disabled && confirming ? "แตะอีกครั้งเพื่อล้างคำตอบทั้งหมด" : "เริ่มใหม่"}
+    </button>
+  );
+}
+
 function SideAssessmentScreen({
   questId,
   playerName,
@@ -909,7 +1277,8 @@ function SideAssessmentScreen({
   onAnswer,
   onPrevious,
   onNext,
-  onBackToHub
+  onBackToHub,
+  onRestart
 }: {
   questId: SideQuestId;
   playerName: string;
@@ -920,6 +1289,7 @@ function SideAssessmentScreen({
   onPrevious: () => void;
   onNext: () => void;
   onBackToHub: () => void;
+  onRestart: () => void;
 }) {
   const isEngagement = questId === "engagement";
   const question = isEngagement
@@ -968,6 +1338,7 @@ function SideAssessmentScreen({
           <div className="mt-2 h-3 overflow-hidden rounded-full bg-white/75">
             <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(answered / total) * 100}%`, backgroundColor: accent }} />
           </div>
+          <RestartQuestButton onRestart={onRestart} disabled={answered === 0} />
         </div>
       </aside>
 
@@ -1160,6 +1531,744 @@ function SideAssessmentResultScreen({
   );
 }
 
+function getLeadershipPotentialProfile(code: LeadershipPotentialCode) {
+  return leadershipPotentialProfiles.find((profile) => profile.code === code)!;
+}
+
+function LeadershipPotentialScreen({
+  playerName,
+  gender,
+  answers,
+  currentIndex,
+  onAnswer,
+  onPrevious,
+  onNext,
+  onBackToHub,
+  onRestart
+}: {
+  playerName: string;
+  gender: Gender | null;
+  answers: LeadershipPotentialAnswers;
+  currentIndex: number;
+  onAnswer: (questionId: number, code: LeadershipPotentialCode) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onBackToHub: () => void;
+  onRestart: () => void;
+}) {
+  const accent = "#795b85";
+  const question = leadershipPotentialQuestions[currentIndex];
+  const selected = answers[question.id];
+  const answeredCount = Object.keys(answers).length;
+  const total = leadershipPotentialQuestions.length;
+  const progress = Math.round((answeredCount / total) * 100);
+
+  return (
+    <section className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <aside className="panel h-fit rounded-[8px] p-5 lg:sticky lg:top-5">
+        <button
+          type="button"
+          onClick={onBackToHub}
+          className="inline-flex items-center gap-2 text-sm font-black text-[#536b8c] transition hover:text-[#24324b]"
+        >
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+        <div className="mt-6 flex items-center gap-3">
+          <span
+            className="grid h-11 w-11 place-items-center rounded-[8px] text-white"
+            style={{ backgroundColor: accent }}
+          >
+            <Crown size={22} />
+          </span>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">
+              Color Quest
+            </p>
+            <p className="text-lg font-black text-[#24324b]">{playerName}</p>
+            <p className="text-xs font-bold text-[#61799b]">{genderLabel(gender)}</p>
+          </div>
+        </div>
+
+        <div className="mt-7 border-t border-[#cdddf0] pt-5">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">
+                Progress
+              </p>
+              <p className="mt-1 text-3xl font-black text-[#24324b]">{progress}%</p>
+            </div>
+            <p className="text-sm font-black text-[#61799b]">
+              {answeredCount}/{total}
+            </p>
+          </div>
+          <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-[#e3edf8]">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${progress}%`, backgroundColor: accent }}
+            />
+          </div>
+          <p className="mt-5 text-sm leading-6 text-[#667393]">
+            เลือกคำตอบที่ใกล้กับตัวคุณที่สุด ระบบจะนับ A, B, C และ D เพื่อหาสีที่เด่น
+          </p>
+          <RestartQuestButton onRestart={onRestart} disabled={answeredCount === 0} />
+        </div>
+      </aside>
+
+      <section className="panel animate-rise rounded-[8px] p-5 sm:p-7">
+        <header className="border-b border-[#cdddf0] pb-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className="rounded-[6px] px-3 py-1.5 text-xs font-black uppercase tracking-[0.12em] text-white"
+                style={{ backgroundColor: accent }}
+              >
+                ภาวะผู้นำ 4 สี
+              </span>
+              <span className="rounded-[6px] border border-[#cdddf0] bg-white/65 px-3 py-1.5 text-xs font-black text-[#61799b]">
+                ข้อ {currentIndex + 1} จาก {total}
+              </span>
+            </div>
+            <span className="text-sm font-black text-[#61799b]">{progress}%</span>
+          </div>
+          <h1 className="mt-4 text-3xl font-black leading-tight text-[#24324b] sm:text-4xl">
+            แบบทดสอบภาวะผู้นำ
+          </h1>
+        </header>
+
+        <div className="py-6">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#71809a]">
+            Item {question.id}
+          </p>
+          <h2 className="mt-3 text-2xl font-black leading-9 text-[#24324b] sm:text-3xl">
+            {question.prompt}
+          </h2>
+
+          <div className="mt-6 grid gap-3" role="radiogroup" aria-label={question.prompt}>
+            {question.options.map((option) => {
+              const optionProfile = getLeadershipPotentialProfile(option.code);
+              const isSelected = selected === option.code;
+
+              return (
+                <button
+                  key={option.code}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() => onAnswer(question.id, option.code)}
+                  className={cx(
+                    "flex min-h-20 items-center gap-4 rounded-[8px] border-2 p-4 text-left transition sm:px-5",
+                    isSelected
+                      ? "text-white shadow-lg"
+                      : "border-[#c9d9ec] bg-white/65 text-[#334967] hover:-translate-y-0.5 hover:bg-white"
+                  )}
+                  style={
+                    isSelected
+                      ? {
+                          borderColor: optionProfile.color,
+                          backgroundColor: optionProfile.color
+                        }
+                      : undefined
+                  }
+                >
+                  <span
+                    className={cx(
+                      "grid h-11 w-11 shrink-0 place-items-center rounded-full border-2 text-lg font-black",
+                      isSelected ? "border-white/55 bg-white/15" : "bg-white"
+                    )}
+                    style={
+                      isSelected
+                        ? undefined
+                        : {
+                            borderColor: optionProfile.color,
+                            color: optionProfile.color
+                          }
+                    }
+                  >
+                    {option.code}
+                  </span>
+                  <span className="text-base font-bold leading-7 sm:text-lg">{option.label}</span>
+                  {isSelected ? <Check className="ml-auto shrink-0" size={21} /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <footer className="grid gap-3 border-t border-[#cdddf0] pt-5 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+          <button
+            type="button"
+            onClick={onPrevious}
+            disabled={currentIndex === 0}
+            className={cx(
+              "inline-flex h-12 items-center justify-center gap-2 rounded-[8px] border px-5 text-sm font-black",
+              currentIndex === 0
+                ? "cursor-not-allowed border-[#d7e3f1] bg-white/35 text-[#98a6bb]"
+                : "border-[#b8cce4] bg-white/75 text-[#38516f]"
+            )}
+          >
+            <ChevronLeft size={18} />
+            ย้อนกลับ
+          </button>
+          <p className="text-center text-sm font-bold text-[#667393]">
+            คำตอบจะบันทึกไว้จนกว่าจะปิดแท็บ
+          </p>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={selected === undefined}
+            className={cx(
+              "inline-flex h-12 items-center justify-center gap-2 rounded-[8px] px-5 text-sm font-black text-white",
+              selected === undefined
+                ? "cursor-not-allowed bg-[#95abc6]"
+                : "hover:-translate-y-0.5"
+            )}
+            style={selected === undefined ? undefined : { backgroundColor: accent }}
+          >
+            {currentIndex === total - 1 ? "ดูผลลัพธ์" : "ต่อไป"}
+            <ChevronRight size={18} />
+          </button>
+        </footer>
+      </section>
+    </section>
+  );
+}
+
+function LeadershipPotentialResultScreen({
+  playerName,
+  result,
+  onBackToAnswers,
+  onBackToHub,
+  onRestart
+}: {
+  playerName: string;
+  result: LeadershipPotentialResult;
+  onBackToAnswers: () => void;
+  onBackToHub: () => void;
+  onRestart: () => void;
+}) {
+  const accent = result.hasTie ? "#795b85" : result.leaders[0].color;
+  const headline = result.hasTie
+    ? "ภาวะผู้นำแบบผสม"
+    : `${result.leaders[0].colorName}: ${result.leaders[0].title}`;
+
+  return (
+    <section className="mx-auto max-w-5xl animate-rise">
+      <div className="no-print mb-5 flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={onBackToHub}
+          className="inline-flex h-11 items-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]"
+        >
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onBackToAnswers}
+            className="h-11 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]"
+          >
+            ดูคำตอบ
+          </button>
+          <button
+            type="button"
+            onClick={onRestart}
+            className="inline-flex h-11 items-center gap-2 rounded-[8px] px-4 text-sm font-black text-white"
+            style={{ backgroundColor: accent }}
+          >
+            <RotateCcw size={16} />
+            ทำใหม่
+          </button>
+        </div>
+      </div>
+
+      <article className="panel rounded-[8px] p-5 sm:p-8">
+        <header className="flex flex-col gap-5 border-b border-[#cdddf0] pb-7 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em]" style={{ color: accent }}>
+              Leadership Potential Result
+            </p>
+            <p className="mt-2 text-sm font-bold text-[#667393]">{playerName}</p>
+            <h1 className="mt-2 text-4xl font-black leading-tight text-[#24324b] sm:text-5xl">
+              {headline}
+            </h1>
+            <p className="mt-4 max-w-3xl text-base font-bold leading-7 text-[#586984]">
+              {result.hasTie
+                ? `คุณมีแนวโน้มเด่นร่วมกัน ${result.leaders.map((profile) => `${profile.colorName} (${profile.code})`).join(" และ ")} จึงแสดงผลทั้งสองด้านโดยไม่บังคับเลือกเพียงสีเดียว`
+                : result.leaders[0].summary}
+            </p>
+          </div>
+          <div
+            className="grid h-24 w-24 shrink-0 place-items-center rounded-[8px] text-white shadow-lg"
+            style={{ backgroundColor: accent }}
+          >
+            <Crown size={42} />
+          </div>
+        </header>
+
+        <section className="mt-7">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-[#71809a]">
+                Answer Count
+              </p>
+              <h2 className="mt-1 text-2xl font-black text-[#24324b]">จำนวนคำตอบแต่ละสี</h2>
+            </div>
+            <p className="text-sm font-bold text-[#667393]">รวม 10 ข้อ</p>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {leadershipPotentialCodes.map((code) => {
+              const profile = getLeadershipPotentialProfile(code);
+              const count = result.counts[code];
+              const isLeader = result.leaders.some((leader) => leader.code === code);
+
+              return (
+                <div
+                  key={code}
+                  className="rounded-[8px] border bg-white/65 p-4"
+                  style={{ borderColor: isLeader ? profile.color : "#cdddf0" }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span
+                      className="grid h-9 w-9 place-items-center rounded-full text-sm font-black text-white"
+                      style={{ backgroundColor: profile.color }}
+                    >
+                      {code}
+                    </span>
+                    <span className="text-2xl font-black text-[#24324b]">{count}/10</span>
+                  </div>
+                  <p className="mt-3 text-sm font-black text-[#334967]">{profile.colorName}</p>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#e3edf8]">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${count * 10}%`, backgroundColor: profile.color }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-8 border-t border-[#cdddf0] pt-7">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-[#71809a]">
+            Your Leadership Profile
+          </p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {result.leaders.map((profile) => (
+              <article
+                key={profile.code}
+                className="rounded-[8px] border border-[#cdddf0] bg-white/65 p-5"
+                style={{ borderTop: `5px solid ${profile.color}` }}
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className="grid h-11 w-11 place-items-center rounded-[8px] text-lg font-black text-white"
+                    style={{ backgroundColor: profile.color }}
+                  >
+                    {profile.code}
+                  </span>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">
+                      {profile.colorName}
+                    </p>
+                    <h3 className="text-xl font-black text-[#24324b]">{profile.title}</h3>
+                  </div>
+                </div>
+                <p className="mt-4 font-bold leading-7 text-[#415572]">{profile.description}</p>
+                <div className="mt-5 border-t border-[#d7e3f1] pt-4">
+                  <p className="text-xs font-black uppercase tracking-[0.14em] text-[#b84f73]">
+                    สิ่งที่ควรระวังและพัฒนา
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-[#667393]">{profile.watchOut}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <p className="mt-8 border-t border-[#cdddf0] pt-4 text-xs leading-5 text-[#71809a]">
+          วิธีคำนวณ: นับจำนวนคำตอบ A, B, C และ D จากทั้ง 10 ข้อ ตัวอักษรที่ถูกเลือกมากที่สุดคือผลลัพธ์หลัก หากมีจำนวนสูงสุดเท่ากันจะแสดงเป็นผลแบบผสม อ้างอิงจากแบบทดสอบภาวะผู้นำและเฉลยที่ผู้สอนจัดให้ ผลนี้ใช้เพื่อการเรียนรู้และสะท้อนตนเอง ไม่ใช่การวินิจฉัยบุคลิกภาพ
+        </p>
+      </article>
+    </section>
+  );
+}
+
+function distributeBelbinScores(itemIds: number[]): BelbinSectionScores {
+  if (itemIds.length === 0) return {};
+  const base = Math.floor(10 / itemIds.length);
+  const remainder = 10 % itemIds.length;
+
+  return Object.fromEntries(
+    itemIds.map((itemId, index) => [itemId, base + (index < remainder ? 1 : 0)])
+  );
+}
+
+function BelbinAssessmentScreen({
+  playerName,
+  gender,
+  answers,
+  currentIndex,
+  onChange,
+  onPrevious,
+  onNext,
+  onBackToHub,
+  onRestart
+}: {
+  playerName: string;
+  gender: Gender | null;
+  answers: BelbinAnswers;
+  currentIndex: number;
+  onChange: (sectionId: BelbinSectionId, scores: BelbinSectionScores) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onBackToHub: () => void;
+  onRestart: () => void;
+}) {
+  const accent = "#b77a26";
+  const section = belbinSections[currentIndex];
+  const scores = answers[section.id] ?? {};
+  const hasAnyAnswer = Object.values(answers).some(
+    (sectionScores) => sectionScores && Object.keys(sectionScores).length > 0
+  );
+  const selectedIds = Object.keys(scores).map(Number);
+  const selectedTotal = Object.values(scores).reduce((sum, score) => sum + score, 0);
+  const completed = countCompletedBelbinSections(answers);
+  const isSectionComplete = isBelbinSectionComplete(scores);
+
+  function toggleItem(itemId: number) {
+    const isSelected = scores[itemId] !== undefined;
+    if (!isSelected && selectedIds.length >= 3) return;
+    const nextIds = isSelected
+      ? selectedIds.filter((id) => id !== itemId)
+      : [...selectedIds, itemId];
+    onChange(section.id, distributeBelbinScores(nextIds));
+  }
+
+  function transferPoint(itemId: number, direction: -1 | 1) {
+    if (selectedIds.length < 2) return;
+    const next = { ...scores };
+
+    if (direction === 1) {
+      const donor = selectedIds
+        .filter((id) => id !== itemId && next[id] > 1)
+        .sort((left, right) => next[right] - next[left])[0];
+      if (donor === undefined) return;
+      next[donor] -= 1;
+      next[itemId] += 1;
+    } else {
+      if (next[itemId] <= 1) return;
+      const recipient = selectedIds
+        .filter((id) => id !== itemId)
+        .sort((left, right) => next[left] - next[right])[0];
+      next[itemId] -= 1;
+      next[recipient] += 1;
+    }
+
+    onChange(section.id, next);
+  }
+
+  return (
+    <section className="mx-auto grid max-w-7xl gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="panel animate-rise rounded-[8px] p-5 lg:sticky lg:top-5 lg:h-fit">
+        <button
+          type="button"
+          onClick={onBackToHub}
+          className="inline-flex h-10 items-center gap-2 text-sm font-black text-[#38516f] transition hover:text-[#2f6fb6]"
+        >
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+
+        <div className="mt-5 flex items-center gap-3">
+          <span className="grid h-12 w-12 place-items-center rounded-[8px] text-white" style={{ backgroundColor: accent }}>
+            <Workflow size={24} />
+          </span>
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-[#71809a]">BELBIN TEAM ROLES</p>
+            <p className="font-black text-[#24324b]">บทบาทในทีม</p>
+          </div>
+        </div>
+
+        <div className="mt-6 border-t border-[#cdddf0] pt-5">
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-[#71809a]">ผู้ทำแบบประเมิน</p>
+          <p className="mt-1 text-xl font-black text-[#24324b]">{playerName}</p>
+          <p className="text-sm font-bold text-[#61799b]">{genderLabel(gender)}</p>
+        </div>
+
+        <div className="mt-6">
+          <div className="flex items-end justify-between">
+            <p className="text-3xl font-black text-[#24324b]">{Math.round((completed / belbinSections.length) * 100)}%</p>
+            <p className="text-sm font-bold text-[#667393]">{completed}/{belbinSections.length} ส่วน</p>
+          </div>
+          <div className="mt-2 h-3 overflow-hidden rounded-full bg-white/75">
+            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(completed / belbinSections.length) * 100}%`, backgroundColor: accent }} />
+          </div>
+          <div className="mt-5 grid grid-cols-7 gap-1.5" aria-label="ความคืบหน้าแต่ละส่วน">
+            {belbinSections.map((item, index) => {
+              const done = isBelbinSectionComplete(answers[item.id]);
+              return (
+                <span
+                  key={item.id}
+                  className={cx(
+                    "grid aspect-square place-items-center rounded-[6px] border text-xs font-black",
+                    index === currentIndex
+                      ? "border-[#8c5b1c] bg-[#fff3dc] text-[#8c5b1c]"
+                      : done
+                        ? "border-[#b77a26] bg-[#b77a26] text-white"
+                        : "border-[#d4dfec] bg-white/55 text-[#8390a5]"
+                  )}
+                >
+                  {item.id}
+                </span>
+              );
+            })}
+          </div>
+          <RestartQuestButton onRestart={onRestart} disabled={!hasAnyAnswer} />
+        </div>
+      </aside>
+
+      <section className="panel animate-rise rounded-[8px] p-5 sm:p-7">
+        <div className="flex flex-col gap-4 border-b border-[#cdddf0] pb-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.16em]" style={{ color: accent }}>BELBIN TEAM ROLES</p>
+            <h1 className="mt-1 text-3xl font-black text-[#24324b]">Section {section.id}</h1>
+            <p className="mt-2 max-w-3xl text-base font-bold leading-7 text-[#586984]">{section.title}</p>
+          </div>
+          <span className="shrink-0 rounded-[8px] border border-[#d9c49d] bg-[#fff9ed] px-3 py-1.5 text-sm font-black text-[#8c5b1c]">
+            ส่วน {currentIndex + 1} จาก {belbinSections.length}
+          </span>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-3 rounded-[8px] border border-[#ead7b6] bg-[#fffaf0] p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-black text-[#5d461f]">เลือกข้อความที่ตรงกับคุณ 1–3 ข้อ</p>
+            <p className="mt-1 text-sm leading-6 text-[#786748]">ระบบแบ่ง 10 คะแนนให้ก่อน แล้วใช้ปุ่ม − / + เพื่อย้ายน้ำหนักระหว่างข้อที่เลือก</p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <span className="rounded-[6px] border border-[#e0c99e] bg-white/75 px-3 py-2 text-sm font-black text-[#6d5730]">เลือก {selectedIds.length}/3</span>
+            <span className={cx("rounded-[6px] border px-3 py-2 text-sm font-black", selectedTotal === 10 ? "border-[#8fb99a] bg-[#eef9f0] text-[#317047]" : "border-[#dfb0aa] bg-[#fff1ef] text-[#a34f45]")}>รวม {selectedTotal}/10</span>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3" key={section.id}>
+          {section.items.map((item, index) => {
+            const itemId = index + 1;
+            const selected = scores[itemId] !== undefined;
+            const selectionLocked = !selected && selectedIds.length >= 3;
+            const canAdjust = selected && selectedIds.length > 1;
+
+            return (
+              <div
+                key={itemId}
+                className={cx(
+                  "grid min-h-20 grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-[8px] border p-3 transition sm:grid-cols-[44px_minmax(0,1fr)_150px] sm:px-4",
+                  selected
+                    ? "border-[#c7923f] bg-[#fff9ed] shadow-[0_10px_28px_rgba(151,105,31,0.12)]"
+                    : selectionLocked
+                      ? "border-[#dbe4ef] bg-white/35 opacity-55"
+                      : "border-[#c9d8e9] bg-white/65 hover:bg-white"
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleItem(itemId)}
+                  disabled={selectionLocked}
+                  aria-pressed={selected}
+                  aria-label={`${selected ? "ยกเลิก" : "เลือก"}ข้อ ${itemId}`}
+                  className={cx(
+                    "grid h-11 w-11 place-items-center rounded-[8px] border text-sm font-black transition",
+                    selected ? "border-[#b77a26] bg-[#b77a26] text-white" : "border-[#c5d6ea] bg-white/80 text-[#526986]"
+                  )}
+                >
+                  {selected ? <CheckCircle2 size={20} /> : itemId}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => toggleItem(itemId)}
+                  disabled={selectionLocked}
+                  className="text-left text-sm font-bold leading-6 text-[#3f5270] sm:text-base"
+                >
+                  {item}
+                </button>
+
+                {selected ? (
+                  <div className="col-span-2 flex h-12 items-center justify-between overflow-hidden rounded-[8px] border border-[#d5b77f] bg-white sm:col-span-1">
+                    <button
+                      type="button"
+                      onClick={() => transferPoint(itemId, -1)}
+                      disabled={!canAdjust || scores[itemId] <= 1}
+                      title="ลดคะแนนข้อนี้"
+                      className="grid h-full w-11 place-items-center text-[#8c5b1c] transition hover:bg-[#fff3dc] disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <Minus size={17} />
+                    </button>
+                    <div className="text-center">
+                      <span className="block text-xl font-black text-[#6d4914]">{scores[itemId]}</span>
+                      <span className="block text-[10px] font-black uppercase text-[#9a7a49]">คะแนน</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => transferPoint(itemId, 1)}
+                      disabled={!canAdjust || selectedIds.every((id) => id === itemId || scores[id] <= 1)}
+                      title="เพิ่มคะแนนข้อนี้"
+                      className="grid h-full w-11 place-items-center text-[#8c5b1c] transition hover:bg-[#fff3dc] disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <Plus size={17} />
+                    </button>
+                  </div>
+                ) : (
+                  <span className="col-span-2 hidden text-right text-xs font-bold text-[#8390a5] sm:col-span-1 sm:block">แตะเพื่อเลือก</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <footer className="mt-8 flex flex-col gap-3 border-t border-[#cdddf0] pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <button
+            type="button"
+            onClick={onPrevious}
+            disabled={currentIndex === 0}
+            className={cx(
+              "inline-flex h-12 items-center justify-center gap-2 rounded-[8px] border px-5 text-sm font-black",
+              currentIndex === 0 ? "cursor-not-allowed border-[#d7e3f1] bg-white/35 text-[#98a6bb]" : "border-[#b8cce4] bg-white/75 text-[#38516f]"
+            )}
+          >
+            <ChevronLeft size={18} />
+            ย้อนกลับ
+          </button>
+          <p className={cx("text-center text-sm font-bold", isSectionComplete ? "text-[#317047]" : "text-[#9a5b52]")}>{isSectionComplete ? "Section นี้พร้อมแล้ว" : "เลือกอย่างน้อย 1 ข้อ และรวมให้ครบ 10 คะแนน"}</p>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={!isSectionComplete}
+            className={cx("inline-flex h-12 items-center justify-center gap-2 rounded-[8px] px-5 text-sm font-black text-white", !isSectionComplete ? "cursor-not-allowed bg-[#95abc6]" : "hover:-translate-y-0.5")}
+            style={!isSectionComplete ? undefined : { backgroundColor: accent }}
+          >
+            {currentIndex === belbinSections.length - 1 ? "ดูผลลัพธ์" : "ส่วนถัดไป"}
+            <ChevronRight size={18} />
+          </button>
+        </footer>
+      </section>
+    </section>
+  );
+}
+
+function BelbinResultScreen({
+  playerName,
+  result,
+  onBackToAnswers,
+  onBackToHub,
+  onRestart
+}: {
+  playerName: string;
+  result: BelbinResult;
+  onBackToAnswers: () => void;
+  onBackToHub: () => void;
+  onRestart: () => void;
+}) {
+  const accent = "#b77a26";
+
+  return (
+    <section className="mx-auto max-w-6xl animate-rise">
+      <div className="no-print mb-5 flex flex-wrap items-center justify-between gap-3">
+        <button type="button" onClick={onBackToHub} className="inline-flex h-11 items-center gap-2 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]">
+          <ChevronLeft size={17} />
+          กระดานเควสต์
+        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={onBackToAnswers} className="h-11 rounded-[8px] border border-[#b8cce4] bg-white/75 px-4 text-sm font-black text-[#38516f]">ดูคำตอบ</button>
+          <button type="button" onClick={onRestart} className="inline-flex h-11 items-center gap-2 rounded-[8px] px-4 text-sm font-black text-white" style={{ backgroundColor: accent }}>
+            <RotateCcw size={16} />
+            ทำใหม่
+          </button>
+        </div>
+      </div>
+
+      <article className="panel rounded-[8px] p-5 sm:p-8">
+        <header className="flex flex-col gap-5 border-b border-[#cdddf0] pb-6 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em]" style={{ color: accent }}>BELBIN TEAM ROLES RESULT</p>
+            <p className="mt-2 text-sm font-bold text-[#667393]">{playerName}</p>
+            <h1 className="mt-2 text-4xl font-black leading-tight text-[#24324b] sm:text-5xl">บทบาทเด่นในทีมของคุณ</h1>
+            <p className="mt-3 max-w-3xl text-base leading-7 text-[#586984]">คะแนนสูงสุดสะท้อนบทบาทที่คุณมีแนวโน้มนำมาใช้เมื่อทำงานร่วมกับผู้อื่น</p>
+          </div>
+          <div className="rounded-[8px] border border-[#d9c49d] bg-[#fff9ed] px-4 py-3 text-center">
+            <p className="text-xs font-black uppercase text-[#8c6d3f]">คะแนนทั้งหมด</p>
+            <p className="mt-1 text-3xl font-black text-[#6d4914]">70</p>
+            <p className="text-xs font-bold text-[#8c6d3f]">จาก 7 Sections</p>
+          </div>
+        </header>
+
+        {result.hasCutoffTie ? (
+          <div className="mt-6 rounded-[8px] border border-[#d8c08e] bg-[#fff8e8] px-4 py-3 text-sm font-bold leading-6 text-[#705426]">
+            มีคะแนนเสมอกันในอันดับตัดสิน จึงแสดงทุกบทบาทที่มีคะแนนเท่ากันเพื่อไม่ตัดผลลัพธ์ทิ้ง
+          </div>
+        ) : null}
+
+        <div className="mt-7 grid gap-4 md:grid-cols-2">
+          {result.featuredRoles.map((role) => (
+            <section key={role.id} className="rounded-[8px] border border-[#d9c49d] bg-[#fffdf8] p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-12 w-12 place-items-center rounded-[8px] text-base font-black text-white" style={{ backgroundColor: accent }}>{role.id}</span>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-[#9a7a49]">อันดับ {role.rank}</p>
+                    <h2 className="text-xl font-black text-[#24324b]">{role.titleTh}</h2>
+                    <p className="text-sm font-bold text-[#8c6d3f]">{role.titleEn}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-3xl font-black text-[#2d5f9c]">{role.score}</span>
+                  <span className="text-xs font-bold text-[#71809a]">/70</span>
+                </div>
+              </div>
+              <p className="mt-5 font-black leading-7 text-[#3f5270]">{role.summary}</p>
+              <p className="mt-3 text-sm leading-7 text-[#667393]">{role.description}</p>
+            </section>
+          ))}
+        </div>
+
+        <section className="mt-8 border-t border-[#cdddf0] pt-7">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.16em]" style={{ color: accent }}>ROLE PROFILE</p>
+              <h2 className="mt-1 text-2xl font-black text-[#24324b]">คะแนนทั้ง 8 บทบาท</h2>
+            </div>
+            <p className="text-sm font-bold text-[#667393]">ผลรวมทุกบทบาท = 70 คะแนน</p>
+          </div>
+
+          <div className="mt-5 grid gap-x-8 gap-y-4 md:grid-cols-2">
+            {result.rankedRoles.map((role) => (
+              <div key={role.id} className="grid grid-cols-[42px_minmax(0,1fr)_44px] items-center gap-3">
+                <span className="text-sm font-black text-[#5c6f8b]">{role.id}</span>
+                <div>
+                  <div className="mb-1 flex justify-between gap-3 text-xs font-bold text-[#667393]">
+                    <span>{role.titleTh}</span>
+                    <span>อันดับ {role.rank}</span>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-[#e3edf8]">
+                    <div className="h-full rounded-full" style={{ width: `${(role.score / 70) * 100}%`, backgroundColor: role.score >= result.rankedRoles[1].score ? accent : "#7ea0c8" }} />
+                  </div>
+                </div>
+                <span className="text-right text-lg font-black text-[#2d5f9c]">{role.score}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <p className="mt-8 border-t border-[#cdddf0] pt-4 text-xs leading-5 text-[#71809a]">
+          อ้างอิง: Belbin Team Roles Self Perception Inventory และ Scoring Key ตามเอกสารประกอบการสอน ผลนี้ใช้เพื่อสะท้อนบทบาทที่มีแนวโน้มโดดเด่นในการทำงานเป็นทีม ไม่ใช่การวินิจฉัยบุคลิกภาพ
+        </p>
+      </article>
+    </section>
+  );
+}
+
 function StartScreen({
   playerName,
   setPlayerName,
@@ -1177,7 +2286,9 @@ function StartScreen({
   const assessmentPreview = [
     { short: "MAIN", title: "Future Self Quest", detail: `${questions.length} ข้อ` },
     { short: "ENGAGE", title: "ความผูกพันต่อองค์กร", detail: `${engagementQuestions.length} ข้อ` },
-    { short: "LEAD", title: "สไตล์ผู้นำ", detail: `${leadershipStyleQuestions.length} ข้อ` }
+    { short: "LEAD", title: "สไตล์ผู้นำ", detail: `${leadershipStyleQuestions.length} ข้อ` },
+    { short: "COLOR", title: "ภาวะผู้นำ 4 สี", detail: `${leadershipPotentialQuestions.length} ข้อ` },
+    { short: "BELBIN", title: "บทบาทในทีม", detail: `${belbinSections.length} ส่วน` }
   ];
 
   return (
@@ -1256,7 +2367,7 @@ function StartScreen({
           </fieldset>
         </div>
 
-        <div className="mt-7 grid max-w-3xl gap-3 sm:grid-cols-3">
+        <div className="mt-7 grid max-w-5xl gap-3 sm:grid-cols-2 xl:grid-cols-5">
           {assessmentPreview.map((assessment) => (
             <div
               key={assessment.short}
@@ -1320,7 +2431,7 @@ function StartScreen({
           </div>
           <div className="rounded-[8px] border border-[#d5e3f4] bg-white/70 px-4 py-3 text-right">
             <p className="text-xs font-bold text-[#6a7890]">Assessments</p>
-            <p className="text-2xl font-black text-[#2d5f9c]">3</p>
+            <p className="text-2xl font-black text-[#2d5f9c]">{assessmentPreview.length}</p>
           </div>
         </div>
       </div>
